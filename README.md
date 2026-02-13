@@ -1,7 +1,3 @@
-Отлично. Тогда даю **enterprise-style README** для Flutter desktop проекта `modbus_simulator` — коротко, профессионально и с архитектурой.
-
----
-
 # modbus_simulator
 
 Industrial-grade Modbus TCP device simulator built with Flutter.
