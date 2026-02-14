@@ -819,6 +819,21 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                 ),
                 FilledButton(onPressed: _restartServer, child: const Text('Start/Restart')),
                 OutlinedButton(onPressed: _stopServer, child: const Text('Stop')),
+                SizedBox(
+                  width: 360,
+                  child: TextField(
+                    controller: _yamlExportPathController,
+                    decoration: const InputDecoration(
+                      labelText: 'YAML export path',
+                      helperText: 'Example format: examples/registers_config.example.yaml',
+                    ),
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed: _exportConfigToYaml,
+                  icon: const Icon(Icons.download),
+                  label: const Text('Экспортировать YAML'),
+                ),
                 Text(_status),
               ],
             ),
@@ -1019,20 +1034,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
             ),
             const SizedBox(height: 6),
             FilledButton(onPressed: _addRange, child: const Text('Add address/range')),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _yamlExportPathController,
-              decoration: const InputDecoration(
-                labelText: 'YAML export path',
-                helperText: 'Example format: examples/registers_config.example.yaml',
-              ),
-            ),
-            const SizedBox(height: 6),
-            FilledButton.icon(
-              onPressed: _exportConfigToYaml,
-              icon: const Icon(Icons.download),
-              label: const Text('Экспортировать YAML конфигурацию'),
-            ),
           ],
         ),
       ),
