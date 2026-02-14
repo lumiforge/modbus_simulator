@@ -517,7 +517,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   final TextEditingController _addStartController = TextEditingController();
   final TextEditingController _addLenController = TextEditingController(text: '1');
   final TextEditingController _addIndexController = TextEditingController(text: '0');
-  final TextEditingController _yamlExportPathController = TextEditingController(text: 'examples/registers_config.yaml');
   RegisterValueType _addType = RegisterValueType.word;
   RegisterAccess _addAccess = RegisterAccess.readWrite;
 
@@ -553,7 +552,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     _addStartController.dispose();
     _addLenController.dispose();
     _addIndexController.dispose();
-    _yamlExportPathController.dispose();
     for (final TextEditingController controller in _rangeValueControllers.values) {
       controller.dispose();
     }
@@ -745,16 +743,8 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   }
 
   Future<String?> _selectYamlExportPath() async {
-    final String currentPath = _yamlExportPathController.text.trim();
-    final String suggestedName;
-    if (currentPath.isEmpty) {
-      suggestedName = 'registers_config.yaml';
-    } else {
-      suggestedName = currentPath.split(RegExp(r'[/\\]')).last;
-    }
-
     final FileSaveLocation? location = await getSaveLocation(
-      suggestedName: suggestedName,
+      suggestedName: 'registers_config.yaml',
       acceptedTypeGroups: <XTypeGroup>[
         const XTypeGroup(label: 'YAML', extensions: <String>['yaml', 'yml']),
       ],
@@ -777,7 +767,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     }
 
     final String rawPath = selectedPath.trim();
-    _yamlExportPathController.text = rawPath;
     if (rawPath.isEmpty) {
       setState(() {
         _status = 'Export error: empty YAML file path';
@@ -852,16 +841,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                 ),
                 FilledButton(onPressed: _restartServer, child: const Text('Start/Restart')),
                 OutlinedButton(onPressed: _stopServer, child: const Text('Stop')),
-                SizedBox(
-                  width: 360,
-                  child: TextField(
-                    controller: _yamlExportPathController,
-                    decoration: const InputDecoration(
-                      labelText: 'YAML export path',
-                      helperText: 'Example format: examples/registers_config.example.yaml',
-                    ),
-                  ),
-                ),
                 FilledButton.icon(
                   onPressed: _exportConfigToYaml,
                   icon: const Icon(Icons.download),
