@@ -32,6 +32,12 @@ Default:
 TCP Port: 502 (configurable)
 ```
 
+Example YAML configuration for register mappings:
+
+```
+examples/registers_config.example.yaml
+```
+
 ---
 
 ## Vision
@@ -39,4 +45,3 @@ TCP Port: 502 (configurable)
 Evolve into a lightweight digital twin framework for industrial device simulation.
 
 ---
-
