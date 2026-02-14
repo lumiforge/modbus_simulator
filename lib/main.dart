@@ -1,8 +1,33 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+
+const int modbusPortDefault = 1502;
+const int uiTailKeep = 2000;
+
+const int addrIoIn = 0x088B;
+const int lenIoIn = 10;
+
+const int addrIoOut = 0x08B3;
+const int lenIoOut = 10;
+
+const int addrMode = 0x0889;
+const int lenMode = 1;
+
+const int addrWorld = 0x091C;
+const int lenWorld = 16;
+
+const int addrAlarm = 0x095C;
+const int lenAlarm = 1;
+
+const int addrMoveStatus = 0x09A6;
+const int lenMoveStatus = 1;
+
+const int addrParam = 0x558C;
+const int lenParam = 12;
 
 void main() {
   runApp(const ModbusSimulatorApp());
@@ -14,48 +39,133 @@ class ModbusSimulatorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Modbus TCP Simulator',
-      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue)),
-      home: const ModbusControlPanel(),
+      title: 'Borunte Emulator',
+      theme: ThemeData.dark().copyWith(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue, brightness: Brightness.dark),
+      ),
+      home: const ModbusDashboard(),
     );
   }
 }
 
-class HoldingRegisterBank {
-  HoldingRegisterBank(this.size) : _values = List<int>.filled(size, 0);
+class RegisterRange {
+  RegisterRange({required this.name, required this.start, required this.length});
 
-  final int size;
-  final List<int> _values;
-  final Map<int, DateTime> _changedAt = <int, DateTime>{};
+  final String name;
+  final int start;
+  final int length;
 
-  List<int>? readRange(int start, int count) {
-    if (!_isInRange(start, count)) {
-      return null;
-    }
-    return List<int>.from(_values.getRange(start, start + count));
+  String get label => '$name (0x${start.toRadixString(16).toUpperCase().padLeft(4, '0')})';
+}
+
+class WriteEvent {
+  WriteEvent({
+    required this.seq,
+    required this.ts,
+    required this.unitId,
+    required this.addr,
+    required this.values,
+  });
+
+  final int seq;
+  final DateTime ts;
+  final int unitId;
+  final int addr;
+  final List<int> values;
+
+  int get count => values.length;
+}
+
+class EventSink {
+  final List<WriteEvent> _tail = <WriteEvent>[];
+  int _seq = 0;
+
+  List<WriteEvent> getTail({int limit = 50}) {
+    final int safeLimit = limit.clamp(1, uiTailKeep);
+    final List<WriteEvent> data = _tail.reversed.take(safeLimit).toList();
+    return data;
   }
 
-  bool writeSingle(int address, int value) {
-    if (!_isInRange(address, 1)) {
+  void addWrite({required int unitId, required int addr, required List<int> values}) {
+    _seq += 1;
+    _tail.add(WriteEvent(seq: _seq, ts: DateTime.now(), unitId: unitId, addr: addr, values: values));
+    if (_tail.length > uiTailKeep) {
+      _tail.removeRange(0, _tail.length - uiTailKeep);
+    }
+  }
+}
+
+class SparseHoldingRegisterBank {
+  SparseHoldingRegisterBank(this.onWrite);
+
+  final void Function(int unitId, int addr, List<int> values) onWrite;
+
+  final Map<int, int> _values = <int, int>{};
+  final Map<int, int> _refCounter = <int, int>{};
+  final Map<int, DateTime> _changedAt = <int, DateTime>{};
+
+  void addRange(int start, int length) {
+    for (int i = 0; i < length; i++) {
+      final int addr = start + i;
+      _values.putIfAbsent(addr, () => 0);
+      _refCounter[addr] = (_refCounter[addr] ?? 0) + 1;
+    }
+  }
+
+  void removeRange(int start, int length) {
+    for (int i = 0; i < length; i++) {
+      final int addr = start + i;
+      final int current = _refCounter[addr] ?? 0;
+      if (current <= 1) {
+        _refCounter.remove(addr);
+        _values.remove(addr);
+        _changedAt.remove(addr);
+      } else {
+        _refCounter[addr] = current - 1;
+      }
+    }
+  }
+
+  bool validate(int start, int count) {
+    if (count <= 0 || start < 0) {
+      return false;
+    }
+    for (int i = 0; i < count; i++) {
+      if (!_values.containsKey(start + i)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  List<int>? readRange(int start, int count) {
+    if (!validate(start, count)) {
+      return null;
+    }
+    return List<int>.generate(count, (int i) => _values[start + i] ?? 0);
+  }
+
+  bool writeSingle(int unitId, int address, int value) {
+    if (!validate(address, 1)) {
       return false;
     }
     _values[address] = value & 0xFFFF;
     _changedAt[address] = DateTime.now();
+    onWrite(unitId, address, <int>[value & 0xFFFF]);
     return true;
   }
 
-  bool writeMultiple(int start, List<int> values) {
-    if (!_isInRange(start, values.length)) {
+  bool writeMultiple(int unitId, int start, List<int> values) {
+    if (!validate(start, values.length)) {
       return false;
     }
     for (int i = 0; i < values.length; i++) {
       _values[start + i] = values[i] & 0xFFFF;
       _changedAt[start + i] = DateTime.now();
     }
+    onWrite(unitId, start, values.map((int e) => e & 0xFFFF).toList());
     return true;
   }
-
-  int valueAt(int address) => _values[address];
 
   bool isRecentlyChanged(int address, Duration window) {
     final DateTime? changedAt = _changedAt[address];
@@ -65,12 +175,7 @@ class HoldingRegisterBank {
     return DateTime.now().difference(changedAt) <= window;
   }
 
-  bool _isInRange(int start, int count) {
-    if (start < 0 || count <= 0) {
-      return false;
-    }
-    return start + count <= size;
-  }
+  int valueAt(int address) => _values[address] ?? 0;
 }
 
 class ModbusLogEntry {
@@ -92,29 +197,18 @@ class ModbusLogEntry {
 }
 
 class ModbusTcpServer {
-  ModbusTcpServer({
-    required this.bank,
-    required this.onRegistersChanged,
-    required this.onLog,
-  });
+  ModbusTcpServer({required this.bank, required this.onRegistersChanged, required this.onLog});
 
-  final HoldingRegisterBank bank;
+  final SparseHoldingRegisterBank bank;
   final VoidCallback onRegistersChanged;
   final void Function(ModbusLogEntry entry) onLog;
 
   ServerSocket? _server;
   final List<Socket> _clients = <Socket>[];
 
-  bool get isRunning => _server != null;
-
   Future<void> start({required int port, InternetAddress? address}) async {
     await stop();
-    _server = await ServerSocket.bind(
-      address ?? InternetAddress.anyIPv4,
-      port,
-      shared: true,
-    );
-
+    _server = await ServerSocket.bind(address ?? InternetAddress.anyIPv4, port, shared: true);
     _server!.listen((Socket client) {
       _clients.add(client);
       client.listen(
@@ -146,7 +240,6 @@ class ModbusTcpServer {
     final int transactionId = view.getUint16(0);
     final int protocolId = view.getUint16(2);
     final int length = view.getUint16(4);
-
     if (protocolId != 0 || data.length < 6 + length) {
       return;
     }
@@ -172,26 +265,11 @@ class ModbusTcpServer {
         break;
       default:
         _sendException(client, transactionId, unitId, functionCode, 0x01);
-        onLog(
-          ModbusLogEntry(
-            timestamp: DateTime.now(),
-            client: clientId,
-            functionCode: functionCode,
-            startAddress: 0,
-            length: 0,
-            result: 'exception',
-          ),
-        );
+        _log(clientId, functionCode, 0, 0, 'exception');
     }
   }
 
-  void _handleReadHoldingRegisters(
-    Socket client,
-    int transactionId,
-    int unitId,
-    Uint8List pdu,
-    String clientId,
-  ) {
+  void _handleReadHoldingRegisters(Socket client, int tid, int unitId, Uint8List pdu, String clientId) {
     if (pdu.length != 5) {
       return;
     }
@@ -202,31 +280,22 @@ class ModbusTcpServer {
 
     final List<int>? values = bank.readRange(start, count);
     if (values == null) {
-      _sendException(client, transactionId, unitId, 3, 0x02);
+      _sendException(client, tid, unitId, 3, 0x02);
       _log(clientId, 3, start, count, 'exception');
       return;
     }
 
     final BytesBuilder responsePdu = BytesBuilder();
-    responsePdu
-      ..addByte(3)
-      ..addByte(count * 2);
-
+    responsePdu..addByte(3)..addByte(count * 2);
     for (final int value in values) {
-      responsePdu.add([(value >> 8) & 0xFF, value & 0xFF]);
+      responsePdu.add(<int>[(value >> 8) & 0xFF, value & 0xFF]);
     }
 
-    _sendResponse(client, transactionId, unitId, responsePdu.toBytes());
+    _sendResponse(client, tid, unitId, responsePdu.toBytes());
     _log(clientId, 3, start, count, 'ok');
   }
 
-  void _handleWriteSingleRegister(
-    Socket client,
-    int transactionId,
-    int unitId,
-    Uint8List pdu,
-    String clientId,
-  ) {
+  void _handleWriteSingleRegister(Socket client, int tid, int unitId, Uint8List pdu, String clientId) {
     if (pdu.length != 5) {
       return;
     }
@@ -235,24 +304,18 @@ class ModbusTcpServer {
     final int address = body.getUint16(1);
     final int value = body.getUint16(3);
 
-    if (!bank.writeSingle(address, value)) {
-      _sendException(client, transactionId, unitId, 6, 0x02);
+    if (!bank.writeSingle(unitId, address, value)) {
+      _sendException(client, tid, unitId, 6, 0x02);
       _log(clientId, 6, address, 1, 'exception');
       return;
     }
 
-    _sendResponse(client, transactionId, unitId, pdu);
+    _sendResponse(client, tid, unitId, pdu);
     _log(clientId, 6, address, 1, 'ok');
     onRegistersChanged();
   }
 
-  void _handleWriteMultipleRegisters(
-    Socket client,
-    int transactionId,
-    int unitId,
-    Uint8List pdu,
-    String clientId,
-  ) {
+  void _handleWriteMultipleRegisters(Socket client, int tid, int unitId, Uint8List pdu, String clientId) {
     if (pdu.length < 6) {
       return;
     }
@@ -272,46 +335,35 @@ class ModbusTcpServer {
       values.add((pdu[offset] << 8) | pdu[offset + 1]);
     }
 
-    if (!bank.writeMultiple(start, values)) {
-      _sendException(client, transactionId, unitId, 16, 0x02);
+    if (!bank.writeMultiple(unitId, start, values)) {
+      _sendException(client, tid, unitId, 16, 0x02);
       _log(clientId, 16, start, count, 'exception');
       return;
     }
 
-    final Uint8List responsePdu = Uint8List.fromList(<int>[
-      16,
-      (start >> 8) & 0xFF,
-      start & 0xFF,
-      (count >> 8) & 0xFF,
-      count & 0xFF,
-    ]);
-
-    _sendResponse(client, transactionId, unitId, responsePdu);
+    _sendResponse(
+      client,
+      tid,
+      unitId,
+      Uint8List.fromList(<int>[16, (start >> 8) & 0xFF, start & 0xFF, (count >> 8) & 0xFF, count & 0xFF]),
+    );
     _log(clientId, 16, start, count, 'ok');
     onRegistersChanged();
   }
 
-  void _sendException(
-    Socket client,
-    int transactionId,
-    int unitId,
-    int function,
-    int exceptionCode,
-  ) {
-    final Uint8List pdu = Uint8List.fromList(<int>[function | 0x80, exceptionCode]);
-    _sendResponse(client, transactionId, unitId, pdu);
+  void _sendException(Socket client, int tid, int unitId, int function, int exceptionCode) {
+    _sendResponse(client, tid, unitId, Uint8List.fromList(<int>[function | 0x80, exceptionCode]));
   }
 
-  void _sendResponse(Socket client, int transactionId, int unitId, Uint8List pdu) {
+  void _sendResponse(Socket client, int tid, int unitId, Uint8List pdu) {
     final int length = pdu.length + 1;
     final BytesBuilder frame = BytesBuilder();
     frame
-      ..add([(transactionId >> 8) & 0xFF, transactionId & 0xFF])
-      ..add([0x00, 0x00])
-      ..add([(length >> 8) & 0xFF, length & 0xFF])
+      ..add(<int>[(tid >> 8) & 0xFF, tid & 0xFF])
+      ..add(<int>[0, 0])
+      ..add(<int>[(length >> 8) & 0xFF, length & 0xFF])
       ..addByte(unitId)
       ..add(pdu);
-
     client.add(frame.toBytes());
   }
 
@@ -329,42 +381,63 @@ class ModbusTcpServer {
   }
 }
 
-class ModbusControlPanel extends StatefulWidget {
-  const ModbusControlPanel({super.key});
+class ModbusDashboard extends StatefulWidget {
+  const ModbusDashboard({super.key});
 
   @override
-  State<ModbusControlPanel> createState() => _ModbusControlPanelState();
+  State<ModbusDashboard> createState() => _ModbusDashboardState();
 }
 
-class _ModbusControlPanelState extends State<ModbusControlPanel> {
-  static const int defaultBankSize = 10000;
+class _ModbusDashboardState extends State<ModbusDashboard> {
   static const Duration highlightWindow = Duration(seconds: 5);
 
-  late final HoldingRegisterBank _bank;
+  late final SparseHoldingRegisterBank _bank;
   late final ModbusTcpServer _server;
-  late final Timer _highlightTimer;
+  late final Timer _uiTimer;
+  final EventSink _sink = EventSink();
 
-  final TextEditingController _addressController = TextEditingController(text: '0');
-  final TextEditingController _countController = TextEditingController(text: '10');
-  final TextEditingController _portController = TextEditingController(text: '1502');
+  final List<RegisterRange> _ranges = <RegisterRange>[
+    RegisterRange(name: 'Robot Mode', start: addrMode, length: lenMode),
+    RegisterRange(name: 'Move Status', start: addrMoveStatus, length: lenMoveStatus),
+    RegisterRange(name: 'IO Inputs', start: addrIoIn, length: lenIoIn),
+    RegisterRange(name: 'IO Outputs', start: addrIoOut, length: lenIoOut),
+    RegisterRange(name: 'World Pos', start: addrWorld, length: lenWorld),
+    RegisterRange(name: 'Alarm Num', start: addrAlarm, length: lenAlarm),
+    RegisterRange(name: 'Int Params', start: addrParam, length: lenParam),
+  ];
 
-  int _address = 0;
-  int _count = 10;
-  int _port = 1502;
+  final TextEditingController _portController = TextEditingController(text: '$modbusPortDefault');
+  final TextEditingController _addNameController = TextEditingController();
+  final TextEditingController _addStartController = TextEditingController();
+  final TextEditingController _addLenController = TextEditingController(text: '1');
+
+  final TextEditingController _modeController = TextEditingController(text: '0');
+  final TextEditingController _moveController = TextEditingController(text: '0');
+  final TextEditingController _alarmController = TextEditingController(text: '0');
+  final TextEditingController _ioInController = TextEditingController(text: '[0,0,0,0,0,0,0,0,0,0]');
+  final TextEditingController _worldController = TextEditingController(
+    text: '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]',
+  );
+
+  final List<ModbusLogEntry> _requestLog = <ModbusLogEntry>[];
+
+  int _port = modbusPortDefault;
   String _status = 'Stopped';
-  final List<ModbusLogEntry> _logs = <ModbusLogEntry>[];
 
   @override
   void initState() {
     super.initState();
-    _bank = HoldingRegisterBank(defaultBankSize);
-    _server = ModbusTcpServer(
-      bank: _bank,
-      onRegistersChanged: _refresh,
-      onLog: _appendLog,
-    );
+    _bank = SparseHoldingRegisterBank((int unitId, int addr, List<int> values) {
+      _sink.addWrite(unitId: unitId, addr: addr, values: values);
+    });
 
-    _highlightTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    for (final RegisterRange range in _ranges) {
+      _bank.addRange(range.start, range.length);
+    }
+
+    _server = ModbusTcpServer(bank: _bank, onRegistersChanged: _refresh, onLog: _addReqLog);
+
+    _uiTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
         setState(() {});
       }
@@ -375,12 +448,36 @@ class _ModbusControlPanelState extends State<ModbusControlPanel> {
 
   @override
   void dispose() {
-    _highlightTimer.cancel();
-    _addressController.dispose();
-    _countController.dispose();
-    _portController.dispose();
+    _uiTimer.cancel();
     _server.stop();
+    _portController.dispose();
+    _addNameController.dispose();
+    _addStartController.dispose();
+    _addLenController.dispose();
+    _modeController.dispose();
+    _moveController.dispose();
+    _alarmController.dispose();
+    _ioInController.dispose();
+    _worldController.dispose();
     super.dispose();
+  }
+
+  void _addReqLog(ModbusLogEntry entry) {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _requestLog.insert(0, entry);
+      if (_requestLog.length > 200) {
+        _requestLog.removeLast();
+      }
+    });
+  }
+
+  void _refresh() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Future<void> _startServer() async {
@@ -390,13 +487,22 @@ class _ModbusControlPanelState extends State<ModbusControlPanel> {
         return;
       }
       setState(() {
-        _status = 'Running on port $_port';
+        _status = 'Running on 0.0.0.0:$_port';
       });
     } on SocketException catch (e) {
       setState(() {
         _status = 'Start error: ${e.message}';
       });
     }
+  }
+
+  Future<void> _restartServer() async {
+    final int? parsedPort = int.tryParse(_portController.text);
+    if (parsedPort == null || parsedPort < 1 || parsedPort > 65535) {
+      return;
+    }
+    _port = parsedPort;
+    await _startServer();
   }
 
   Future<void> _stopServer() async {
@@ -409,103 +515,67 @@ class _ModbusControlPanelState extends State<ModbusControlPanel> {
     });
   }
 
-  void _appendLog(ModbusLogEntry entry) {
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _logs.insert(0, entry);
-      if (_logs.length > 200) {
-        _logs.removeLast();
+  Future<void> _writeByControl(int addr, TextEditingController controller) async {
+    final String text = controller.text.trim();
+    List<int> values;
+    if (text.startsWith('[')) {
+      final dynamic decoded = jsonDecode(text);
+      if (decoded is! List) {
+        return;
       }
-    });
+      values = decoded.map((dynamic e) => (e as num).toInt()).toList();
+    } else {
+      final int? parsed = int.tryParse(text);
+      if (parsed == null) {
+        return;
+      }
+      values = <int>[parsed];
+    }
+
+    final bool ok = _bank.writeMultiple(0, addr, values);
+    if (ok) {
+      _refresh();
+    }
   }
 
-  void _refresh() {
-    if (!mounted) {
-      return;
-    }
-    setState(() {});
-  }
-
-  void _applyViewSettings() {
-    final int? parsedAddress = int.tryParse(_addressController.text);
-    final int? parsedCount = int.tryParse(_countController.text);
-
-    if (parsedAddress == null || parsedAddress < 0 || parsedAddress >= _bank.size) {
-      return;
-    }
-    if (parsedCount == null || parsedCount < 1 || parsedCount > 50) {
+  void _addRange() {
+    final String name = _addNameController.text.trim();
+    final int? start = int.tryParse(_addStartController.text.trim());
+    final int? len = int.tryParse(_addLenController.text.trim());
+    if (name.isEmpty || start == null || len == null || start < 0 || len < 1) {
       return;
     }
 
     setState(() {
-      _address = parsedAddress;
-      final int maxCount = _bank.size - _address;
-      _count = parsedCount > maxCount ? maxCount : parsedCount;
+      final RegisterRange range = RegisterRange(name: name, start: start, length: len);
+      _ranges.add(range);
+      _bank.addRange(start, len);
+      _addNameController.clear();
+      _addStartController.clear();
+      _addLenController.text = '1';
     });
   }
 
-  Future<void> _applyPortAndRestart() async {
-    final int? parsedPort = int.tryParse(_portController.text);
-    if (parsedPort == null || parsedPort < 1 || parsedPort > 65535) {
+  void _removeRange(int index) {
+    if (index < 0 || index >= _ranges.length) {
       return;
     }
-
-    _port = parsedPort;
-    await _startServer();
-  }
-
-  Future<void> _editRegister(int address) async {
-    final TextEditingController editor = TextEditingController(
-      text: _bank.valueAt(address).toString(),
-    );
-
-    final int? value = await showDialog<int>(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text('Edit register $address'),
-          content: TextField(
-            controller: editor,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'uint16 value (0..65535)'),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () {
-                final int? parsed = int.tryParse(editor.text);
-                if (parsed == null || parsed < 0 || parsed > 65535) {
-                  return;
-                }
-                Navigator.of(context).pop(parsed);
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (value == null) {
-      return;
-    }
-
-    _bank.writeSingle(address, value);
-    _refresh();
+    setState(() {
+      final RegisterRange range = _ranges.removeAt(index);
+      _bank.removeRange(range.start, range.length);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final int end = (_address + _count).clamp(0, _bank.size);
-    final List<int> visibleAddresses = List<int>.generate(end - _address, (int i) => _address + i);
+    final List<WriteEvent> writes = _sink.getTail(limit: 50);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Modbus TCP Server Simulator')),
+      appBar: AppBar(title: const Text('Borunte Robot Emulator (Strict Mode v3)')),
       body: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(16),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Wrap(
               spacing: 12,
@@ -513,129 +583,197 @@ class _ModbusControlPanelState extends State<ModbusControlPanel> {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 SizedBox(
-                  width: 130,
+                  width: 120,
                   child: TextField(
                     controller: _portController,
-                    keyboardType: TextInputType.number,
                     decoration: const InputDecoration(labelText: 'Port'),
+                    keyboardType: TextInputType.number,
                   ),
                 ),
-                FilledButton(
-                  onPressed: _applyPortAndRestart,
-                  child: const Text('Start/Restart'),
-                ),
+                FilledButton(onPressed: _restartServer, child: const Text('Start/Restart')),
                 OutlinedButton(onPressed: _stopServer, child: const Text('Stop')),
                 Text(_status),
               ],
             ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                SizedBox(
-                  width: 130,
-                  child: TextField(
-                    controller: _addressController,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Address (0-based)'),
-                  ),
-                ),
-                SizedBox(
-                  width: 130,
-                  child: TextField(
-                    controller: _countController,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Count (1..50)'),
-                  ),
-                ),
-                FilledButton(onPressed: _applyViewSettings, child: const Text('Refresh')),
-              ],
-            ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             Expanded(
               child: Row(
                 children: [
-                  Expanded(
-                    flex: 3,
-                    child: Card(
-                      child: Column(
-                        children: [
-                          const ListTile(title: Text('Holding registers')),
-                          Expanded(
-                            child: ListView.builder(
-                              itemCount: visibleAddresses.length,
-                              itemBuilder: (BuildContext context, int index) {
-                                final int address = visibleAddresses[index];
-                                final int value = _bank.valueAt(address);
-                                final bool changed = _bank.isRecentlyChanged(address, highlightWindow);
-                                final Color? rowColor = changed
-                                    ? Colors.yellow.withValues(alpha: 0.25)
-                                    : null;
-
-                                return InkWell(
-                                  onTap: () => _editRegister(address),
-                                  child: Container(
-                                    color: rowColor,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 8,
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Expanded(child: Text('$address')),
-                                        Expanded(child: Text('$value')),
-                                        Expanded(child: Text('0x${value.toRadixString(16).toUpperCase().padLeft(4, '0')}')),
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    flex: 2,
-                    child: Card(
-                      child: Column(
-                        children: [
-                          const ListTile(title: Text('Request log')),
-                          Expanded(
-                            child: ListView.builder(
-                              itemCount: _logs.length,
-                              itemBuilder: (BuildContext context, int index) {
-                                final ModbusLogEntry entry = _logs[index];
-                                final String timestamp =
-                                    '${entry.timestamp.hour.toString().padLeft(2, '0')}:'
-                                    '${entry.timestamp.minute.toString().padLeft(2, '0')}:'
-                                    '${entry.timestamp.second.toString().padLeft(2, '0')}';
-
-                                return ListTile(
-                                  dense: true,
-                                  title: Text(
-                                    '$timestamp ${entry.client} FC${entry.functionCode.toString().padLeft(2, '0')}',
-                                  ),
-                                  subtitle: Text(
-                                    'addr=${entry.startAddress} len=${entry.length} ${entry.result}',
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+                  Expanded(flex: 2, child: _buildWritesPanel(writes)),
+                  const SizedBox(width: 12),
+                  Expanded(flex: 2, child: _buildRangesPanel()),
+                  const SizedBox(width: 12),
+                  Expanded(flex: 2, child: _buildControlsPanel()),
                 ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(height: 130, child: _buildRequestPanel()),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWritesPanel(List<WriteEvent> writes) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Write Logs (From PLC/UI)', style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            Expanded(
+              child: ListView.builder(
+                itemCount: writes.length,
+                itemBuilder: (BuildContext context, int index) {
+                  final WriteEvent w = writes[index];
+                  final String t =
+                      '${w.ts.hour.toString().padLeft(2, '0')}:${w.ts.minute.toString().padLeft(2, '0')}:${w.ts.second.toString().padLeft(2, '0')}';
+                  return Text(
+                    '#${w.seq} $t u=${w.unitId} 0x${w.addr.toRadixString(16).toUpperCase()} (${w.addr}) ${w.values}',
+                    style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                  );
+                },
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildRangesPanel() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Memory State / Watch Ranges', style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ListView.builder(
+                itemCount: _ranges.length,
+                itemBuilder: (BuildContext context, int index) {
+                  final RegisterRange range = _ranges[index];
+                  final List<int>? values = _bank.readRange(range.start, range.length);
+                  final bool changed = values != null &&
+                      List<int>.generate(range.length, (int i) => range.start + i)
+                          .any((int addr) => _bank.isRecentlyChanged(addr, highlightWindow));
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.white24),
+                      color: changed ? Colors.yellow.withValues(alpha: 0.18) : null,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '${range.name} | ${range.start}..${range.start + range.length - 1}',
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                              ),
+                            ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              onPressed: () => _removeRange(index),
+                              icon: const Icon(Icons.delete_outline, size: 18),
+                            ),
+                          ],
+                        ),
+                        Text(values?.toString() ?? 'ERR', style: const TextStyle(fontSize: 12)),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+            const Divider(),
+            TextField(controller: _addNameController, decoration: const InputDecoration(labelText: 'Range name')),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _addStartController,
+                    decoration: const InputDecoration(labelText: 'Start addr'),
+                    keyboardType: TextInputType.number,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _addLenController,
+                    decoration: const InputDecoration(labelText: 'Length'),
+                    keyboardType: TextInputType.number,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            FilledButton(onPressed: _addRange, child: const Text('Add range')),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildControlsPanel() {
+    Widget control(String title, int addr, TextEditingController controller) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(border: Border.all(color: Colors.white24)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text('Addr: 0x${addr.toRadixString(16).toUpperCase()} ($addr)', style: const TextStyle(fontSize: 11)),
+            TextField(controller: controller),
+            const SizedBox(height: 4),
+            FilledButton(onPressed: () => _writeByControl(addr, controller), child: const Text('Write')),
+          ],
+        ),
+      );
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: ListView(
+          children: [
+            const Text('Controls (Simulate Robot)', style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            control('Robot Mode', addrMode, _modeController),
+            control('Movement Status', addrMoveStatus, _moveController),
+            control('Alarm Number', addrAlarm, _alarmController),
+            control('IO Inputs [10 words]', addrIoIn, _ioInController),
+            control('World Position [16 words]', addrWorld, _worldController),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRequestPanel() {
+    return Card(
+      child: ListView.builder(
+        itemCount: _requestLog.length,
+        itemBuilder: (BuildContext context, int index) {
+          final ModbusLogEntry e = _requestLog[index];
+          final String t =
+              '${e.timestamp.hour.toString().padLeft(2, '0')}:${e.timestamp.minute.toString().padLeft(2, '0')}:${e.timestamp.second.toString().padLeft(2, '0')}';
+          return ListTile(
+            dense: true,
+            title: Text('$t ${e.client} FC${e.functionCode} ${e.result}'),
+            subtitle: Text('addr=${e.startAddress} len=${e.length}'),
+          );
+        },
       ),
     );
   }
