@@ -5,7 +5,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
-const int modbusPortDefault = 502;
+const int modbusPortDefault = 1502;
 const int uiTailKeep = 2000;
 
 const int addrIoIn = 0x088B;
@@ -205,17 +205,23 @@ class ModbusTcpServer {
 
   ServerSocket? _server;
   final List<Socket> _clients = <Socket>[];
+  final Map<Socket, BytesBuilder> _buffers = <Socket, BytesBuilder>{};
 
   Future<void> start({required int port, InternetAddress? address}) async {
     await stop();
     _server = await ServerSocket.bind(address ?? InternetAddress.anyIPv4, port, shared: true);
     _server!.listen((Socket client) {
       _clients.add(client);
+      _buffers[client] = BytesBuilder(copy: false);
       client.listen(
-        (Uint8List data) => _handleRequest(client, data),
-        onDone: () => _clients.remove(client),
+        (Uint8List data) => _handleIncomingData(client, data),
+        onDone: () {
+          _clients.remove(client);
+          _buffers.remove(client);
+        },
         onError: (_) {
           _clients.remove(client);
+          _buffers.remove(client);
           client.destroy();
         },
       );
@@ -227,20 +233,58 @@ class ModbusTcpServer {
       client.destroy();
     }
     _clients.clear();
+    _buffers.clear();
     await _server?.close();
     _server = null;
   }
 
-  void _handleRequest(Socket client, Uint8List data) {
+  void _handleIncomingData(Socket client, Uint8List data) {
+    final BytesBuilder? buffer = _buffers[client];
+    if (buffer == null) {
+      return;
+    }
+
+    buffer.add(data);
+    Uint8List pending = buffer.toBytes();
+
+    while (pending.length >= 7) {
+      final ByteData header = ByteData.sublistView(pending, 0, 6);
+      final int protocolId = header.getUint16(2);
+      final int length = header.getUint16(4);
+
+      if (protocolId != 0 || length < 2) {
+        client.destroy();
+        _clients.remove(client);
+        _buffers.remove(client);
+        return;
+      }
+
+      final int frameLen = 6 + length;
+      if (pending.length < frameLen) {
+        break;
+      }
+
+      final Uint8List frame = Uint8List.sublistView(pending, 0, frameLen);
+      _handleRequestFrame(client, frame);
+      pending = Uint8List.sublistView(pending, frameLen);
+    }
+
+    final BytesBuilder next = BytesBuilder(copy: false);
+    if (pending.isNotEmpty) {
+      next.add(pending);
+    }
+    _buffers[client] = next;
+  }
+
+  void _handleRequestFrame(Socket client, Uint8List data) {
     if (data.length < 8) {
       return;
     }
 
     final ByteData view = ByteData.sublistView(data);
     final int transactionId = view.getUint16(0);
-    final int protocolId = view.getUint16(2);
     final int length = view.getUint16(4);
-    if (protocolId != 0 || data.length < 6 + length) {
+    if (data.length != 6 + length) {
       return;
     }
 
