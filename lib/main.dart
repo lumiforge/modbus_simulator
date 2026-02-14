@@ -516,6 +516,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   final TextEditingController _addStartController = TextEditingController();
   final TextEditingController _addLenController = TextEditingController(text: '1');
   final TextEditingController _addIndexController = TextEditingController(text: '0');
+  final TextEditingController _yamlExportPathController = TextEditingController(text: 'inputs_config.yaml');
   RegisterValueType _addType = RegisterValueType.word;
   RegisterAccess _addAccess = RegisterAccess.readWrite;
 
@@ -552,6 +553,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     _addStartController.dispose();
     _addLenController.dispose();
     _addIndexController.dispose();
+    _yamlExportPathController.dispose();
     for (final TextEditingController controller in _rangeValueControllers.values) {
       controller.dispose();
     }
@@ -714,6 +716,78 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
       _bank.removeRange(range.start, range.storageLength);
       _rangeValueControllers.remove(range.start)?.dispose();
     });
+  }
+
+  String _registerAccessToYaml(RegisterAccess access) {
+    switch (access) {
+      case RegisterAccess.read:
+        return 'read';
+      case RegisterAccess.write:
+        return 'write';
+      case RegisterAccess.readWrite:
+        return 'read_write';
+    }
+  }
+
+  String _registerTypeToYaml(RegisterValueType type) {
+    switch (type) {
+      case RegisterValueType.bit:
+        return 'bit';
+      case RegisterValueType.byte:
+        return 'byte';
+      case RegisterValueType.word:
+        return 'word';
+    }
+  }
+
+  String _escapeYamlString(String value) {
+    return value.replaceAll("'", "''");
+  }
+
+  Future<void> _exportRangesToYaml() async {
+    final String rawPath = _yamlExportPathController.text.trim();
+    if (rawPath.isEmpty) {
+      setState(() {
+        _status = 'Export error: empty YAML file path';
+      });
+      return;
+    }
+
+    final StringBuffer yaml = StringBuffer()
+      ..writeln('version: 1')
+      ..writeln('generated_at: ${DateTime.now().toUtc().toIso8601String()}')
+      ..writeln('inputs:');
+
+    for (final RegisterRange range in _ranges) {
+      final List<int>? values = _bank.readRangeRaw(range.start, range.storageLength);
+      yaml
+        ..writeln("  - name: '${_escapeYamlString(range.name)}'")
+        ..writeln('    address: ${range.start}')
+        ..writeln('    access: ${_registerAccessToYaml(range.access)}')
+        ..writeln('    value_type: ${_registerTypeToYaml(range.valueType)}')
+        ..writeln('    length: ${range.length}')
+        ..writeln('    index: ${range.valueIndex}')
+        ..writeln('    values: [${(values ?? <int>[]).join(', ')}]');
+    }
+
+    try {
+      final File output = File(rawPath);
+      await output.parent.create(recursive: true);
+      await output.writeAsString(yaml.toString());
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = 'Exported ${_ranges.length} inputs to ${output.path}';
+      });
+    } on FileSystemException catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = 'Export error: ${e.message}';
+      });
+    }
   }
 
   @override
@@ -942,6 +1016,13 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
             ),
             const SizedBox(height: 6),
             FilledButton(onPressed: _addRange, child: const Text('Add address/range')),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _yamlExportPathController,
+              decoration: const InputDecoration(labelText: 'YAML export path'),
+            ),
+            const SizedBox(height: 6),
+            OutlinedButton(onPressed: _exportRangesToYaml, child: const Text('Export inputs to YAML')),
           ],
         ),
       ),
