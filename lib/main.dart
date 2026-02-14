@@ -8,30 +8,11 @@ import 'package:flutter/material.dart';
 const int modbusPortDefault = 1502;
 const int uiTailKeep = 2000;
 
-const int addrIoIn = 0x088B;
-const int lenIoIn = 10;
-
-const int addrIoOut = 0x08B3;
-const int lenIoOut = 10;
-
-const int addrMode = 0x0889;
-const int lenMode = 1;
-
-const int addrWorld = 0x091C;
-const int lenWorld = 16;
-
-const int addrAlarm = 0x095C;
-const int lenAlarm = 1;
-
-const int addrMoveStatus = 0x09A6;
-const int lenMoveStatus = 1;
-
-const int addrParam = 0x558C;
-const int lenParam = 12;
-
 void main() {
   runApp(const ModbusSimulatorApp());
 }
+
+enum RegisterAccess { read, write, readWrite }
 
 class ModbusSimulatorApp extends StatelessWidget {
   const ModbusSimulatorApp({super.key});
@@ -52,6 +33,7 @@ class RegisterRange {
   RegisterRange({
     required this.name,
     required this.start,
+    required this.access,
     this.length = 1,
     this.valueType = RegisterValueType.word,
     this.valueIndex = 0,
@@ -59,6 +41,7 @@ class RegisterRange {
 
   final String name;
   final int start;
+  final RegisterAccess access;
   final int length;
   final RegisterValueType valueType;
   final int valueIndex;
@@ -75,6 +58,17 @@ class RegisterRange {
         return 'byte#$valueIndex';
       case RegisterValueType.word:
         return length > 1 ? 'word[$length]' : 'word';
+    }
+  }
+
+  String get accessLabel {
+    switch (access) {
+      case RegisterAccess.read:
+        return 'R';
+      case RegisterAccess.write:
+        return 'W';
+      case RegisterAccess.readWrite:
+        return 'RW';
     }
   }
 
@@ -153,37 +147,49 @@ class SparseHoldingRegisterBank {
   final void Function(int unitId, int addr, List<int> values) onWrite;
 
   final Map<int, int> _values = <int, int>{};
-  final Map<int, int> _refCounter = <int, int>{};
+  final Map<int, RegisterAccess> _accessByAddress = <int, RegisterAccess>{};
   final Map<int, DateTime> _changedAt = <int, DateTime>{};
 
-  void addRange(int start, int length) {
+  bool addRange(int start, int length, RegisterAccess access) {
+    if (start < 0 || length <= 0) {
+      return false;
+    }
+    for (int i = 0; i < length; i++) {
+      if (_values.containsKey(start + i)) {
+        return false;
+      }
+    }
     for (int i = 0; i < length; i++) {
       final int addr = start + i;
-      _values.putIfAbsent(addr, () => 0);
-      _refCounter[addr] = (_refCounter[addr] ?? 0) + 1;
+      _values[addr] = 0;
+      _accessByAddress[addr] = access;
     }
+    return true;
   }
 
   void removeRange(int start, int length) {
     for (int i = 0; i < length; i++) {
       final int addr = start + i;
-      final int current = _refCounter[addr] ?? 0;
-      if (current <= 1) {
-        _refCounter.remove(addr);
-        _values.remove(addr);
-        _changedAt.remove(addr);
-      } else {
-        _refCounter[addr] = current - 1;
-      }
+      _values.remove(addr);
+      _accessByAddress.remove(addr);
+      _changedAt.remove(addr);
     }
   }
 
-  bool validate(int start, int count) {
+  bool _validate(int start, int count, {required bool forWrite}) {
     if (count <= 0 || start < 0) {
       return false;
     }
     for (int i = 0; i < count; i++) {
-      if (!_values.containsKey(start + i)) {
+      final int addr = start + i;
+      final RegisterAccess? access = _accessByAddress[addr];
+      if (access == null) {
+        return false;
+      }
+      if (forWrite && access == RegisterAccess.read) {
+        return false;
+      }
+      if (!forWrite && access == RegisterAccess.write) {
         return false;
       }
     }
@@ -191,14 +197,14 @@ class SparseHoldingRegisterBank {
   }
 
   List<int>? readRange(int start, int count) {
-    if (!validate(start, count)) {
+    if (!_validate(start, count, forWrite: false)) {
       return null;
     }
     return List<int>.generate(count, (int i) => _values[start + i] ?? 0);
   }
 
   bool writeSingle(int unitId, int address, int value) {
-    if (!validate(address, 1)) {
+    if (!_validate(address, 1, forWrite: true)) {
       return false;
     }
     _values[address] = value & 0xFFFF;
@@ -208,7 +214,7 @@ class SparseHoldingRegisterBank {
   }
 
   bool writeMultiple(int unitId, int start, List<int> values) {
-    if (!validate(start, values.length)) {
+    if (!_validate(start, values.length, forWrite: true)) {
       return false;
     }
     for (int i = 0; i < values.length; i++) {
@@ -226,8 +232,6 @@ class SparseHoldingRegisterBank {
     }
     return DateTime.now().difference(changedAt) <= window;
   }
-
-  int valueAt(int address) => _values[address] ?? 0;
 }
 
 class ModbusLogEntry {
@@ -492,15 +496,8 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   late final Timer _uiTimer;
   final EventSink _sink = EventSink();
 
-  final List<RegisterRange> _ranges = <RegisterRange>[
-    RegisterRange(name: 'Robot Mode', start: addrMode, length: lenMode),
-    RegisterRange(name: 'Move Status', start: addrMoveStatus, length: lenMoveStatus),
-    RegisterRange(name: 'IO Inputs', start: addrIoIn, length: lenIoIn),
-    RegisterRange(name: 'IO Outputs', start: addrIoOut, length: lenIoOut),
-    RegisterRange(name: 'World Pos', start: addrWorld, length: lenWorld),
-    RegisterRange(name: 'Alarm Num', start: addrAlarm, length: lenAlarm),
-    RegisterRange(name: 'Int Params', start: addrParam, length: lenParam),
-  ];
+  final List<RegisterRange> _ranges = <RegisterRange>[];
+  final Map<int, TextEditingController> _rangeValueControllers = <int, TextEditingController>{};
 
   final TextEditingController _portController = TextEditingController(text: '$modbusPortDefault');
   final TextEditingController _addNameController = TextEditingController();
@@ -508,14 +505,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   final TextEditingController _addLenController = TextEditingController(text: '1');
   final TextEditingController _addIndexController = TextEditingController(text: '0');
   RegisterValueType _addType = RegisterValueType.word;
-
-  final TextEditingController _modeController = TextEditingController(text: '0');
-  final TextEditingController _moveController = TextEditingController(text: '0');
-  final TextEditingController _alarmController = TextEditingController(text: '0');
-  final TextEditingController _ioInController = TextEditingController(text: '[0,0,0,0,0,0,0,0,0,0]');
-  final TextEditingController _worldController = TextEditingController(
-    text: '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]',
-  );
+  RegisterAccess _addAccess = RegisterAccess.readWrite;
 
   final List<ModbusLogEntry> _requestLog = <ModbusLogEntry>[];
 
@@ -529,9 +519,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
       _sink.addWrite(unitId: unitId, addr: addr, values: values);
     });
 
-    for (final RegisterRange range in _ranges) {
-      _bank.addRange(range.start, range.storageLength);
-    }
 
     _server = ModbusTcpServer(bank: _bank, onRegistersChanged: _refresh, onLog: _addReqLog);
 
@@ -553,11 +540,9 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     _addStartController.dispose();
     _addLenController.dispose();
     _addIndexController.dispose();
-    _modeController.dispose();
-    _moveController.dispose();
-    _alarmController.dispose();
-    _ioInController.dispose();
-    _worldController.dispose();
+    for (final TextEditingController controller in _rangeValueControllers.values) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
@@ -614,7 +599,16 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     });
   }
 
-  Future<void> _writeByControl(int addr, TextEditingController controller) async {
+  void _writeRangeValue(RegisterRange range) {
+    if (range.access == RegisterAccess.read) {
+      return;
+    }
+
+    final TextEditingController? controller = _rangeValueControllers[range.start];
+    if (controller == null) {
+      return;
+    }
+
     final String text = controller.text.trim();
     List<int> values;
     if (text.startsWith('[')) {
@@ -631,7 +625,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
       values = <int>[parsed];
     }
 
-    final bool ok = _bank.writeMultiple(0, addr, values);
+    final bool ok = _bank.writeMultiple(0, range.start, values);
     if (ok) {
       _refresh();
     }
@@ -655,17 +649,23 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
       return;
     }
 
+    final int safeLength = _addType == RegisterValueType.word ? len : 1;
+    final RegisterRange range = RegisterRange(
+      name: name,
+      start: start,
+      access: _addAccess,
+      length: safeLength,
+      valueType: _addType,
+      valueIndex: index,
+    );
+    final bool added = _bank.addRange(start, range.storageLength, _addAccess);
+    if (!added) {
+      return;
+    }
+
     setState(() {
-      final int safeLength = _addType == RegisterValueType.word ? len : 1;
-      final RegisterRange range = RegisterRange(
-        name: name,
-        start: start,
-        length: safeLength,
-        valueType: _addType,
-        valueIndex: index,
-      );
       _ranges.add(range);
-      _bank.addRange(start, range.storageLength);
+      _rangeValueControllers[start] = TextEditingController(text: safeLength > 1 ? '[0]' : '0');
       _addNameController.clear();
       _addStartController.clear();
       _addLenController.text = '1';
@@ -680,6 +680,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     setState(() {
       final RegisterRange range = _ranges.removeAt(index);
       _bank.removeRange(range.start, range.storageLength);
+      _rangeValueControllers.remove(range.start)?.dispose();
     });
   }
 
@@ -718,9 +719,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                 children: [
                   Expanded(flex: 2, child: _buildWritesPanel(writes)),
                   const SizedBox(width: 12),
-                  Expanded(flex: 2, child: _buildRangesPanel()),
-                  const SizedBox(width: 12),
-                  Expanded(flex: 2, child: _buildControlsPanel()),
+                  Expanded(flex: 3, child: _buildRangesPanel()),
                 ],
               ),
             ),
@@ -768,7 +767,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Memory State / Watch Ranges', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text('Registers', style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             Expanded(
               child: ListView.builder(
@@ -776,6 +775,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                 itemBuilder: (BuildContext context, int index) {
                   final RegisterRange range = _ranges[index];
                   final bool changed = range.isChanged(_bank, highlightWindow);
+                  final TextEditingController? valueController = _rangeValueControllers[range.start];
                   return Container(
                     margin: const EdgeInsets.only(bottom: 8),
                     padding: const EdgeInsets.all(8),
@@ -790,7 +790,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                           children: [
                             Expanded(
                               child: Text(
-                                '${range.name} | ${range.start} | ${range.typeLabel}',
+                                '${range.name} | ${range.start} | ${range.typeLabel} | ${range.accessLabel}',
                                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
                               ),
                             ),
@@ -801,7 +801,23 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                             ),
                           ],
                         ),
-                        Text(range.displayValue(_bank), style: const TextStyle(fontSize: 12)),
+                        Text('Current: ${range.displayValue(_bank)}', style: const TextStyle(fontSize: 12)),
+                        if (valueController != null) ...<Widget>[
+                          const SizedBox(height: 4),
+                          TextField(
+                            controller: valueController,
+                            enabled: range.access != RegisterAccess.read,
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              labelText: 'New value (number or [..])',
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          FilledButton(
+                            onPressed: range.access == RegisterAccess.read ? null : () => _writeRangeValue(range),
+                            child: const Text('Write value'),
+                          ),
+                        ],
                       ],
                     ),
                   );
@@ -809,7 +825,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
               ),
             ),
             const Divider(),
-            TextField(controller: _addNameController, decoration: const InputDecoration(labelText: 'Range name')),
+            TextField(controller: _addNameController, decoration: const InputDecoration(labelText: 'Name')),
             Row(
               children: [
                 Expanded(
@@ -820,6 +836,29 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                   ),
                 ),
                 const SizedBox(width: 8),
+                Expanded(
+                  child: DropdownButtonFormField<RegisterAccess>(
+                    value: _addAccess,
+                    decoration: const InputDecoration(labelText: 'Access'),
+                    items: const <DropdownMenuItem<RegisterAccess>>[
+                      DropdownMenuItem<RegisterAccess>(value: RegisterAccess.read, child: Text('R (Read)')),
+                      DropdownMenuItem<RegisterAccess>(value: RegisterAccess.write, child: Text('W (Write)')),
+                      DropdownMenuItem<RegisterAccess>(value: RegisterAccess.readWrite, child: Text('RW (Read/Write)')),
+                    ],
+                    onChanged: (RegisterAccess? value) {
+                      if (value == null) {
+                        return;
+                      }
+                      setState(() {
+                        _addAccess = value;
+                      });
+                    },
+                  ),
+                ),
+              ],
+            ),
+            Row(
+              children: [
                 Expanded(
                   child: DropdownButtonFormField<RegisterValueType>(
                     value: _addType,
@@ -845,23 +884,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                     },
                   ),
                 ),
-              ],
-            ),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _addIndexController,
-                    decoration: InputDecoration(
-                      labelText: _addType == RegisterValueType.bit
-                          ? 'Bit index (0..15)'
-                          : _addType == RegisterValueType.byte
-                              ? 'Byte index (0..1)'
-                              : 'Index (0)',
-                    ),
-                    keyboardType: TextInputType.number,
-                  ),
-                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: TextField(
@@ -875,45 +897,19 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                 ),
               ],
             ),
+            TextField(
+              controller: _addIndexController,
+              decoration: InputDecoration(
+                labelText: _addType == RegisterValueType.bit
+                    ? 'Bit index (0..15)'
+                    : _addType == RegisterValueType.byte
+                        ? 'Byte index (0..1)'
+                        : 'Index (0)',
+              ),
+              keyboardType: TextInputType.number,
+            ),
             const SizedBox(height: 6),
-            FilledButton(onPressed: _addRange, child: const Text('Add range')),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildControlsPanel() {
-    Widget control(String title, int addr, TextEditingController controller) {
-      return Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(border: Border.all(color: Colors.white24)),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-            Text('Addr: 0x${addr.toRadixString(16).toUpperCase()} ($addr)', style: const TextStyle(fontSize: 11)),
-            TextField(controller: controller),
-            const SizedBox(height: 4),
-            FilledButton(onPressed: () => _writeByControl(addr, controller), child: const Text('Write')),
-          ],
-        ),
-      );
-    }
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: ListView(
-          children: [
-            const Text('Controls (Simulate Robot)', style: TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            control('Robot Mode', addrMode, _modeController),
-            control('Movement Status', addrMoveStatus, _moveController),
-            control('Alarm Number', addrAlarm, _alarmController),
-            control('IO Inputs [10 words]', addrIoIn, _ioInController),
-            control('World Position [16 words]', addrWorld, _worldController),
+            FilledButton(onPressed: _addRange, child: const Text('Add address/range')),
           ],
         ),
       ),
