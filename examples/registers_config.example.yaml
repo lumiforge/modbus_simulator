@@ -18,8 +18,14 @@ inputs:
     value_type: word
     length: 1
 
+  - name: 'Movement status'
+    address: 2470
+    access: read
+    value_type: word
+    length: 1
+    
   - name: 'World position'
-    address: 2347
+    address: 2332
     access: read
     value_type: word
     length: 16
