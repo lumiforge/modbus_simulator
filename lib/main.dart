@@ -49,14 +49,66 @@ class ModbusSimulatorApp extends StatelessWidget {
 }
 
 class RegisterRange {
-  RegisterRange({required this.name, required this.start, required this.length});
+  RegisterRange({
+    required this.name,
+    required this.start,
+    this.length = 1,
+    this.valueType = RegisterValueType.word,
+    this.valueIndex = 0,
+  });
 
   final String name;
   final int start;
   final int length;
+  final RegisterValueType valueType;
+  final int valueIndex;
 
   String get label => '$name (0x${start.toRadixString(16).toUpperCase().padLeft(4, '0')})';
+
+  int get storageLength => valueType == RegisterValueType.word ? length : 1;
+
+  String get typeLabel {
+    switch (valueType) {
+      case RegisterValueType.bit:
+        return 'bit#$valueIndex';
+      case RegisterValueType.byte:
+        return 'byte#$valueIndex';
+      case RegisterValueType.word:
+        return length > 1 ? 'word[$length]' : 'word';
+    }
+  }
+
+  String displayValue(SparseHoldingRegisterBank bank) {
+    final List<int>? values = bank.readRange(start, storageLength);
+    if (values == null || values.isEmpty) {
+      return 'ERR';
+    }
+
+    switch (valueType) {
+      case RegisterValueType.word:
+        return values.toString();
+      case RegisterValueType.byte:
+        final int rawWord = values.first;
+        final int byteValue = valueIndex == 0 ? rawWord & 0xFF : (rawWord >> 8) & 0xFF;
+        return '$byteValue (0x${byteValue.toRadixString(16).toUpperCase().padLeft(2, '0')})';
+      case RegisterValueType.bit:
+        final int rawWord = values.first;
+        final int bitValue = (rawWord >> valueIndex) & 0x1;
+        return '$bitValue';
+    }
+  }
+
+  bool isChanged(SparseHoldingRegisterBank bank, Duration window) {
+    for (int i = 0; i < storageLength; i++) {
+      if (bank.isRecentlyChanged(start + i, window)) {
+        return true;
+      }
+    }
+    return false;
+  }
 }
+
+enum RegisterValueType { bit, byte, word }
 
 class WriteEvent {
   WriteEvent({
@@ -454,6 +506,8 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   final TextEditingController _addNameController = TextEditingController();
   final TextEditingController _addStartController = TextEditingController();
   final TextEditingController _addLenController = TextEditingController(text: '1');
+  final TextEditingController _addIndexController = TextEditingController(text: '0');
+  RegisterValueType _addType = RegisterValueType.word;
 
   final TextEditingController _modeController = TextEditingController(text: '0');
   final TextEditingController _moveController = TextEditingController(text: '0');
@@ -476,7 +530,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     });
 
     for (final RegisterRange range in _ranges) {
-      _bank.addRange(range.start, range.length);
+      _bank.addRange(range.start, range.storageLength);
     }
 
     _server = ModbusTcpServer(bank: _bank, onRegistersChanged: _refresh, onLog: _addReqLog);
@@ -498,6 +552,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     _addNameController.dispose();
     _addStartController.dispose();
     _addLenController.dispose();
+    _addIndexController.dispose();
     _modeController.dispose();
     _moveController.dispose();
     _alarmController.dispose();
@@ -586,17 +641,35 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     final String name = _addNameController.text.trim();
     final int? start = int.tryParse(_addStartController.text.trim());
     final int? len = int.tryParse(_addLenController.text.trim());
-    if (name.isEmpty || start == null || len == null || start < 0 || len < 1) {
+    final int? index = int.tryParse(_addIndexController.text.trim());
+
+    if (name.isEmpty || start == null || len == null || start < 0 || len < 1 || index == null || index < 0) {
+      return;
+    }
+
+    if (_addType == RegisterValueType.bit && index > 15) {
+      return;
+    }
+
+    if (_addType == RegisterValueType.byte && index > 1) {
       return;
     }
 
     setState(() {
-      final RegisterRange range = RegisterRange(name: name, start: start, length: len);
+      final int safeLength = _addType == RegisterValueType.word ? len : 1;
+      final RegisterRange range = RegisterRange(
+        name: name,
+        start: start,
+        length: safeLength,
+        valueType: _addType,
+        valueIndex: index,
+      );
       _ranges.add(range);
-      _bank.addRange(start, len);
+      _bank.addRange(start, range.storageLength);
       _addNameController.clear();
       _addStartController.clear();
       _addLenController.text = '1';
+      _addIndexController.text = '0';
     });
   }
 
@@ -606,7 +679,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     }
     setState(() {
       final RegisterRange range = _ranges.removeAt(index);
-      _bank.removeRange(range.start, range.length);
+      _bank.removeRange(range.start, range.storageLength);
     });
   }
 
@@ -702,10 +775,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                 itemCount: _ranges.length,
                 itemBuilder: (BuildContext context, int index) {
                   final RegisterRange range = _ranges[index];
-                  final List<int>? values = _bank.readRange(range.start, range.length);
-                  final bool changed = values != null &&
-                      List<int>.generate(range.length, (int i) => range.start + i)
-                          .any((int addr) => _bank.isRecentlyChanged(addr, highlightWindow));
+                  final bool changed = range.isChanged(_bank, highlightWindow);
                   return Container(
                     margin: const EdgeInsets.only(bottom: 8),
                     padding: const EdgeInsets.all(8),
@@ -720,7 +790,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                           children: [
                             Expanded(
                               child: Text(
-                                '${range.name} | ${range.start}..${range.start + range.length - 1}',
+                                '${range.name} | ${range.start} | ${range.typeLabel}',
                                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
                               ),
                             ),
@@ -731,7 +801,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                             ),
                           ],
                         ),
-                        Text(values?.toString() ?? 'ERR', style: const TextStyle(fontSize: 12)),
+                        Text(range.displayValue(_bank), style: const TextStyle(fontSize: 12)),
                       ],
                     ),
                   );
@@ -745,7 +815,50 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                 Expanded(
                   child: TextField(
                     controller: _addStartController,
-                    decoration: const InputDecoration(labelText: 'Start addr'),
+                    decoration: const InputDecoration(labelText: 'Address'),
+                    keyboardType: TextInputType.number,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: DropdownButtonFormField<RegisterValueType>(
+                    value: _addType,
+                    decoration: const InputDecoration(labelText: 'Type'),
+                    items: RegisterValueType.values
+                        .map(
+                          (RegisterValueType type) => DropdownMenuItem<RegisterValueType>(
+                            value: type,
+                            child: Text(type.name),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (RegisterValueType? value) {
+                      if (value == null) {
+                        return;
+                      }
+                      setState(() {
+                        _addType = value;
+                        if (_addType != RegisterValueType.word) {
+                          _addLenController.text = '1';
+                        }
+                      });
+                    },
+                  ),
+                ),
+              ],
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _addIndexController,
+                    decoration: InputDecoration(
+                      labelText: _addType == RegisterValueType.bit
+                          ? 'Bit index (0..15)'
+                          : _addType == RegisterValueType.byte
+                              ? 'Byte index (0..1)'
+                              : 'Index (0)',
+                    ),
                     keyboardType: TextInputType.number,
                   ),
                 ),
@@ -753,8 +866,11 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                 Expanded(
                   child: TextField(
                     controller: _addLenController,
-                    decoration: const InputDecoration(labelText: 'Length'),
+                    decoration: InputDecoration(
+                      labelText: _addType == RegisterValueType.word ? 'Words count' : 'Words count (fixed 1)',
+                    ),
                     keyboardType: TextInputType.number,
+                    enabled: _addType == RegisterValueType.word,
                   ),
                 ),
               ],
