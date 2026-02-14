@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
 const int modbusPortDefault = 1502;
@@ -743,8 +744,40 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     return value.replaceAll("'", "''");
   }
 
+  Future<String?> _selectYamlExportPath() async {
+    final String currentPath = _yamlExportPathController.text.trim();
+    final String suggestedName;
+    if (currentPath.isEmpty) {
+      suggestedName = 'registers_config.yaml';
+    } else {
+      suggestedName = currentPath.split(RegExp(r'[/\\]')).last;
+    }
+
+    final FileSaveLocation? location = await getSaveLocation(
+      suggestedName: suggestedName,
+      acceptedTypeGroups: <XTypeGroup>[
+        const XTypeGroup(label: 'YAML', extensions: <String>['yaml', 'yml']),
+      ],
+      confirmButtonText: 'Экспортировать',
+    );
+
+    return location?.path;
+  }
+
   Future<void> _exportConfigToYaml() async {
-    final String rawPath = _yamlExportPathController.text.trim();
+    final String? selectedPath = await _selectYamlExportPath();
+    if (selectedPath == null || selectedPath.trim().isEmpty) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = 'Экспорт отменён';
+      });
+      return;
+    }
+
+    final String rawPath = selectedPath.trim();
+    _yamlExportPathController.text = rawPath;
     if (rawPath.isEmpty) {
       setState(() {
         _status = 'Export error: empty YAML file path';
