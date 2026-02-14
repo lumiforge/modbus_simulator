@@ -662,6 +662,139 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     });
   }
 
+  Future<void> _showAddRegisterDialog() async {
+    final TextEditingController nameController = TextEditingController();
+    final TextEditingController startController = TextEditingController();
+    final TextEditingController lengthController = TextEditingController(text: '1');
+    final TextEditingController valueIndexController = TextEditingController(text: '0');
+
+    RegisterAccess access = RegisterAccess.readWrite;
+    RegisterValueType valueType = RegisterValueType.word;
+
+    final bool? shouldCreate = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Добавить регистр'),
+          content: SizedBox(
+            width: 420,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Name')),
+                  TextField(
+                    controller: startController,
+                    decoration: const InputDecoration(labelText: 'Start address'),
+                    keyboardType: TextInputType.number,
+                  ),
+                  DropdownButtonFormField<RegisterValueType>(
+                    value: valueType,
+                    decoration: const InputDecoration(labelText: 'Value type'),
+                    items: RegisterValueType.values
+                        .map(
+                          (RegisterValueType type) => DropdownMenuItem<RegisterValueType>(
+                            value: type,
+                            child: Text(type.name),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (RegisterValueType? next) {
+                      if (next != null) {
+                        valueType = next;
+                      }
+                    },
+                  ),
+                  TextField(
+                    controller: lengthController,
+                    decoration: const InputDecoration(labelText: 'Word length'),
+                    keyboardType: TextInputType.number,
+                  ),
+                  TextField(
+                    controller: valueIndexController,
+                    decoration: const InputDecoration(labelText: 'Bit/byte index'),
+                    keyboardType: TextInputType.number,
+                  ),
+                  DropdownButtonFormField<RegisterAccess>(
+                    value: access,
+                    decoration: const InputDecoration(labelText: 'Access'),
+                    items: RegisterAccess.values
+                        .map(
+                          (RegisterAccess nextAccess) => DropdownMenuItem<RegisterAccess>(
+                            value: nextAccess,
+                            child: Text(nextAccess.name),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (RegisterAccess? next) {
+                      if (next != null) {
+                        access = next;
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Отмена')),
+            FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Добавить')),
+          ],
+        );
+      },
+    );
+
+    if (shouldCreate != true || !mounted) {
+      nameController.dispose();
+      startController.dispose();
+      lengthController.dispose();
+      valueIndexController.dispose();
+      return;
+    }
+
+    final int? start = int.tryParse(startController.text.trim());
+    final int parsedLength = int.tryParse(lengthController.text.trim()) ?? 1;
+    final int parsedValueIndex = int.tryParse(valueIndexController.text.trim()) ?? 0;
+    final String parsedName = nameController.text.trim().isEmpty ? 'Register ${_ranges.length + 1}' : nameController.text.trim();
+    final int storageLength = valueType == RegisterValueType.word ? parsedLength : 1;
+
+    if (start == null || start < 0 || storageLength < 1) {
+      if (mounted) {
+        setState(() {
+          _status = 'Ошибка: проверьте параметры нового регистра';
+        });
+      }
+    } else {
+      final RegisterRange range = RegisterRange(
+        name: parsedName,
+        start: start,
+        access: access,
+        length: parsedLength,
+        valueType: valueType,
+        valueIndex: parsedValueIndex,
+      );
+      final bool added = _bank.addRange(range.start, range.storageLength, range.access);
+      if (!added) {
+        setState(() {
+          _status = 'Ошибка: диапазон адресов уже занят';
+        });
+      } else {
+        setState(() {
+          _ranges.add(range);
+          _rangeValueControllers[range.start] = TextEditingController(
+            text: range.storageLength > 1 ? jsonEncode(List<int>.filled(range.storageLength, 0)) : '0',
+          );
+          _status = 'Добавлен регистр ${range.name} (${range.start})';
+        });
+      }
+    }
+
+    nameController.dispose();
+    startController.dispose();
+    lengthController.dispose();
+    valueIndexController.dispose();
+  }
+
   Future<String?> _selectYamlConfigPath() async {
     final XFile? file = await openFile(
       acceptedTypeGroups: <XTypeGroup>[
@@ -903,16 +1036,24 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
             ),
             const SizedBox(height: 12),
             Expanded(
-              child: Column(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(flex: 3, child: _buildRangesPanel()),
-                  const SizedBox(height: 12),
-                  Expanded(flex: 2, child: _buildWritesPanel(writes)),
+                  Expanded(flex: 4, child: _buildRangesPanel()),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 420,
+                    child: Column(
+                      children: [
+                        Expanded(child: _buildWritesPanel(writes)),
+                        const SizedBox(height: 8),
+                        SizedBox(height: 170, child: _buildRequestPanel()),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
-            const SizedBox(height: 8),
-            SizedBox(height: 130, child: _buildRequestPanel()),
           ],
         ),
       ),
@@ -955,59 +1096,80 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Registers', style: TextStyle(fontWeight: FontWeight.bold)),
+            Row(
+              children: [
+                const Expanded(child: Text('Registers', style: TextStyle(fontWeight: FontWeight.bold))),
+                IconButton(
+                  tooltip: 'Добавить регистр',
+                  onPressed: _showAddRegisterDialog,
+                  icon: const Icon(Icons.add),
+                ),
+              ],
+            ),
             const SizedBox(height: 8),
             Expanded(
-              child: ListView.builder(
-                itemCount: _ranges.length,
-                itemBuilder: (BuildContext context, int index) {
-                  final RegisterRange range = _ranges[index];
-                  final bool changed = range.isChanged(_bank, highlightWindow);
-                  final TextEditingController? valueController = _rangeValueControllers[range.start];
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.white24),
-                      color: changed ? Colors.yellow.withValues(alpha: 0.18) : null,
+              child: LayoutBuilder(
+                builder: (BuildContext context, BoxConstraints constraints) {
+                  final int columns = (constraints.maxWidth / 360).floor().clamp(1, 6);
+                  return GridView.builder(
+                    itemCount: _ranges.length,
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: columns,
+                      crossAxisSpacing: 8,
+                      mainAxisSpacing: 8,
+                      childAspectRatio: 1.8,
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
+                    itemBuilder: (BuildContext context, int index) {
+                      final RegisterRange range = _ranges[index];
+                      final bool changed = range.isChanged(_bank, highlightWindow);
+                      final TextEditingController? valueController = _rangeValueControllers[range.start];
+                      return Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.white24),
+                          color: changed ? Colors.yellow.withValues(alpha: 0.18) : null,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Expanded(
-                              child: Text(
-                                '${range.name} | ${range.start} | ${range.typeLabel} | ${range.accessLabel}',
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    '${range.name} | ${range.start} | ${range.typeLabel} | ${range.accessLabel}',
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: () => _removeRange(index),
+                                  icon: const Icon(Icons.delete_outline, size: 18),
+                                ),
+                              ],
+                            ),
+                            Text('Current: ${range.displayValue(_bank)}', style: const TextStyle(fontSize: 12), maxLines: 2),
+                            if (valueController != null) ...<Widget>[
+                              const SizedBox(height: 4),
+                              TextField(
+                                controller: valueController,
+                                enabled: range.access != RegisterAccess.read,
+                                decoration: const InputDecoration(
+                                  isDense: true,
+                                  labelText: 'New value (number or [..])',
+                                ),
                               ),
-                            ),
-                            IconButton(
-                              visualDensity: VisualDensity.compact,
-                              onPressed: () => _removeRange(index),
-                              icon: const Icon(Icons.delete_outline, size: 18),
-                            ),
+                              const SizedBox(height: 4),
+                              FilledButton(
+                                onPressed: range.access == RegisterAccess.read ? null : () => _writeRangeValue(range),
+                                child: const Text('Write value'),
+                              ),
+                            ],
                           ],
                         ),
-                        Text('Current: ${range.displayValue(_bank)}', style: const TextStyle(fontSize: 12)),
-                        if (valueController != null) ...<Widget>[
-                          const SizedBox(height: 4),
-                          TextField(
-                            controller: valueController,
-                            enabled: range.access != RegisterAccess.read,
-                            decoration: const InputDecoration(
-                              isDense: true,
-                              labelText: 'New value (number or [..])',
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          FilledButton(
-                            onPressed: range.access == RegisterAccess.read ? null : () => _writeRangeValue(range),
-                            child: const Text('Write value'),
-                          ),
-                        ],
-                      ],
-                    ),
+                      );
+                    },
                   );
                 },
               ),
