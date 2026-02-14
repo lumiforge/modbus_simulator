@@ -513,12 +513,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   final Map<int, TextEditingController> _rangeValueControllers = <int, TextEditingController>{};
 
   final TextEditingController _portController = TextEditingController(text: '$modbusPortDefault');
-  final TextEditingController _addNameController = TextEditingController();
-  final TextEditingController _addStartController = TextEditingController();
-  final TextEditingController _addLenController = TextEditingController(text: '1');
-  final TextEditingController _addIndexController = TextEditingController(text: '0');
-  RegisterValueType _addType = RegisterValueType.word;
-  RegisterAccess _addAccess = RegisterAccess.readWrite;
 
   final List<ModbusLogEntry> _requestLog = <ModbusLogEntry>[];
 
@@ -548,10 +542,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     _uiTimer.cancel();
     _server.stop();
     _portController.dispose();
-    _addNameController.dispose();
-    _addStartController.dispose();
-    _addLenController.dispose();
-    _addIndexController.dispose();
     for (final TextEditingController controller in _rangeValueControllers.values) {
       controller.dispose();
     }
@@ -661,50 +651,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     }
   }
 
-  void _addRange() {
-    final String name = _addNameController.text.trim();
-    final int? start = int.tryParse(_addStartController.text.trim());
-    final int? len = int.tryParse(_addLenController.text.trim());
-    final int? index = int.tryParse(_addIndexController.text.trim());
-
-    if (name.isEmpty || start == null || len == null || start < 0 || len < 1 || index == null || index < 0) {
-      return;
-    }
-
-    if (_addType == RegisterValueType.bit && index > 15) {
-      return;
-    }
-
-    if (_addType == RegisterValueType.byte && index > 1) {
-      return;
-    }
-
-    final int safeLength = _addType == RegisterValueType.word ? len : 1;
-    final RegisterRange range = RegisterRange(
-      name: name,
-      start: start,
-      access: _addAccess,
-      length: safeLength,
-      valueType: _addType,
-      valueIndex: index,
-    );
-    final bool added = _bank.addRange(start, range.storageLength, _addAccess);
-    if (!added) {
-      return;
-    }
-
-    setState(() {
-      _ranges.add(range);
-      _rangeValueControllers[start] = TextEditingController(
-        text: safeLength > 1 ? jsonEncode(List<int>.filled(safeLength, 0)) : '0',
-      );
-      _addNameController.clear();
-      _addStartController.clear();
-      _addLenController.text = '1';
-      _addIndexController.text = '0';
-    });
-  }
-
   void _removeRange(int index) {
     if (index < 0 || index >= _ranges.length) {
       return;
@@ -716,52 +662,104 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     });
   }
 
-  String _registerAccessToYaml(RegisterAccess access) {
-    switch (access) {
-      case RegisterAccess.read:
-        return 'read';
-      case RegisterAccess.write:
-        return 'write';
-      case RegisterAccess.readWrite:
-        return 'read_write';
-    }
-  }
-
-  String _registerTypeToYaml(RegisterValueType type) {
-    switch (type) {
-      case RegisterValueType.bit:
-        return 'bit';
-      case RegisterValueType.byte:
-        return 'byte';
-      case RegisterValueType.word:
-        return 'word';
-    }
-  }
-
-  String _escapeYamlString(String value) {
-    return value.replaceAll("'", "''");
-  }
-
-  Future<String?> _selectYamlExportPath() async {
-    final FileSaveLocation? location = await getSaveLocation(
-      suggestedName: 'registers_config.yaml',
+  Future<String?> _selectYamlConfigPath() async {
+    final XFile? file = await openFile(
       acceptedTypeGroups: <XTypeGroup>[
         const XTypeGroup(label: 'YAML', extensions: <String>['yaml', 'yml']),
       ],
-      confirmButtonText: 'Экспортировать',
+      confirmButtonText: 'Выбрать',
     );
 
-    return location?.path;
+    return file?.path;
   }
 
-  Future<void> _exportConfigToYaml() async {
-    final String? selectedPath = await _selectYamlExportPath();
+  RegisterAccess? _parseYamlAccess(String value) {
+    switch (value.trim()) {
+      case 'read':
+        return RegisterAccess.read;
+      case 'write':
+        return RegisterAccess.write;
+      case 'read_write':
+        return RegisterAccess.readWrite;
+      default:
+        return null;
+    }
+  }
+
+  RegisterValueType? _parseYamlValueType(String value) {
+    switch (value.trim()) {
+      case 'bit':
+        return RegisterValueType.bit;
+      case 'byte':
+        return RegisterValueType.byte;
+      case 'word':
+        return RegisterValueType.word;
+      default:
+        return null;
+    }
+  }
+
+  List<Map<String, String>> _parseInputItems(String content) {
+    final List<Map<String, String>> items = <Map<String, String>>[];
+    Map<String, String>? current;
+
+    for (final String rawLine in LineSplitter.split(content)) {
+      final String line = rawLine.trimRight();
+      final String trimmed = line.trimLeft();
+      if (trimmed.isEmpty || trimmed.startsWith('#') || trimmed == 'inputs:') {
+        continue;
+      }
+
+      if (trimmed.startsWith('- ')) {
+        final Map<String, String> item = <String, String>{};
+        final String rest = trimmed.substring(2).trim();
+        if (rest.contains(':')) {
+          final int split = rest.indexOf(':');
+          item[rest.substring(0, split).trim()] = rest.substring(split + 1).trim();
+        }
+        items.add(item);
+        current = item;
+        continue;
+      }
+
+      if (current == null || !trimmed.contains(':')) {
+        continue;
+      }
+      final int split = trimmed.indexOf(':');
+      current[trimmed.substring(0, split).trim()] = trimmed.substring(split + 1).trim();
+    }
+
+    return items;
+  }
+
+  String _parseYamlName(String value) {
+    final String trimmed = value.trim();
+    if (trimmed.length >= 2 && trimmed.startsWith("'") && trimmed.endsWith("'")) {
+      return trimmed.substring(1, trimmed.length - 1).replaceAll("''", "'");
+    }
+    return trimmed;
+  }
+
+  List<int> _parseYamlValues(String valuesRaw) {
+    final String trimmed = valuesRaw.trim();
+    if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) {
+      return <int>[];
+    }
+    final String inner = trimmed.substring(1, trimmed.length - 1).trim();
+    if (inner.isEmpty) {
+      return <int>[];
+    }
+    return inner.split(',').map((String e) => int.parse(e.trim())).toList();
+  }
+
+  Future<void> _importConfigFromYaml() async {
+    final String? selectedPath = await _selectYamlConfigPath();
     if (selectedPath == null || selectedPath.trim().isEmpty) {
       if (!mounted) {
         return;
       }
       setState(() {
-        _status = 'Экспорт отменён';
+        _status = 'Выбор файла отменён';
       });
       return;
     }
@@ -769,48 +767,108 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     final String rawPath = selectedPath.trim();
     if (rawPath.isEmpty) {
       setState(() {
-        _status = 'Export error: empty YAML file path';
+        _status = 'Import error: empty YAML file path';
       });
       return;
     }
 
-    final StringBuffer yaml = StringBuffer()
-      ..writeln('version: 1')
-      ..writeln('inputs:');
-
-    for (final RegisterRange range in _ranges) {
-      final List<int>? values = _bank.readRangeRaw(range.start, range.storageLength);
-      yaml
-        ..writeln("  - name: '${_escapeYamlString(range.name)}'")
-        ..writeln('    address: ${range.start}')
-        ..writeln('    access: ${_registerAccessToYaml(range.access)}')
-        ..writeln('    value_type: ${_registerTypeToYaml(range.valueType)}')
-        ..writeln('    length: ${range.length}');
-      if (range.valueType != RegisterValueType.word || range.valueIndex != 0) {
-        yaml.writeln('    index: ${range.valueIndex}');
-      }
-      if (values != null && values.any((int value) => value != 0)) {
-        yaml.writeln('    values: [${values.join(', ')}]');
-      }
-      yaml.writeln();
-    }
-
     try {
-      final File output = File(rawPath);
-      await output.parent.create(recursive: true);
-      await output.writeAsString(yaml.toString());
+      final File input = File(rawPath);
+      final String content = await input.readAsString();
+      final List<Map<String, String>> items = _parseInputItems(content);
+      if (items.isEmpty) {
+        setState(() {
+          _status = 'Import error: inputs не найдены в YAML';
+        });
+        return;
+      }
+
+      final List<RegisterRange> importedRanges = <RegisterRange>[];
+      final Map<int, List<int>> importedValues = <int, List<int>>{};
+
+      for (final Map<String, String> item in items) {
+        final String name = _parseYamlName(item['name'] ?? '');
+        final int? address = int.tryParse((item['address'] ?? '').trim());
+        final RegisterAccess? access = _parseYamlAccess(item['access'] ?? '');
+        final RegisterValueType? type = _parseYamlValueType(item['value_type'] ?? '');
+        final int length = int.tryParse((item['length'] ?? '').trim()) ?? 1;
+        final int index = int.tryParse((item['index'] ?? '').trim()) ?? 0;
+
+        if (name.isEmpty || address == null || address < 0 || access == null || type == null || length < 1 || index < 0) {
+          setState(() {
+            _status = 'Import error: некорректная запись в YAML';
+          });
+          return;
+        }
+
+        final int safeLength = type == RegisterValueType.word ? length : 1;
+        final RegisterRange range = RegisterRange(
+          name: name,
+          start: address,
+          access: access,
+          length: safeLength,
+          valueType: type,
+          valueIndex: index,
+        );
+        importedRanges.add(range);
+
+        if (item.containsKey('values')) {
+          importedValues[address] = _parseYamlValues(item['values']!);
+        }
+      }
+
+      for (final RegisterRange range in _ranges) {
+        _bank.removeRange(range.start, range.storageLength);
+      }
+      for (final TextEditingController controller in _rangeValueControllers.values) {
+        controller.dispose();
+      }
+      _rangeValueControllers.clear();
+      _ranges.clear();
+
+      for (final RegisterRange range in importedRanges) {
+        final bool added = _bank.addRange(range.start, range.storageLength, range.access);
+        if (!added) {
+          setState(() {
+            _status = 'Import error: пересечение адресов в YAML';
+          });
+          return;
+        }
+        final List<int> initial = importedValues[range.start] ?? <int>[];
+        if (initial.isNotEmpty) {
+          final List<int> valuesToWrite = initial.take(range.storageLength).toList();
+          if (valuesToWrite.length < range.storageLength) {
+            valuesToWrite.addAll(List<int>.filled(range.storageLength - valuesToWrite.length, 0));
+          }
+          _bank.writeMultiple(0, range.start, valuesToWrite);
+        }
+        _ranges.add(range);
+        _rangeValueControllers[range.start] = TextEditingController(
+          text: range.storageLength > 1
+              ? jsonEncode(_bank.readRangeRaw(range.start, range.storageLength) ?? List<int>.filled(range.storageLength, 0))
+              : (_bank.readRangeRaw(range.start, 1)?.first ?? 0).toString(),
+        );
+      }
+
       if (!mounted) {
         return;
       }
       setState(() {
-        _status = 'Exported ${_ranges.length} inputs to ${output.path}';
+        _status = 'Импортировано ${_ranges.length} регистров из ${input.path}';
       });
     } on FileSystemException catch (e) {
       if (!mounted) {
         return;
       }
       setState(() {
-        _status = 'Export error: ${e.message}';
+        _status = 'Import error: ${e.message}';
+      });
+    } on FormatException {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = 'Import error: неверный формат YAML';
       });
     }
   }
@@ -842,9 +900,9 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                 FilledButton(onPressed: _restartServer, child: const Text('Start/Restart')),
                 OutlinedButton(onPressed: _stopServer, child: const Text('Stop')),
                 FilledButton.icon(
-                  onPressed: _exportConfigToYaml,
+                  onPressed: _importConfigFromYaml,
                   icon: const Icon(Icons.download),
-                  label: const Text('Экспортировать YAML'),
+                  label: const Text('Экспортировать'),
                 ),
                 Text(_status),
               ],
@@ -960,92 +1018,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                 },
               ),
             ),
-            const Divider(),
-            TextField(controller: _addNameController, decoration: const InputDecoration(labelText: 'Name')),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _addStartController,
-                    decoration: const InputDecoration(labelText: 'Address'),
-                    keyboardType: TextInputType.number,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: DropdownButtonFormField<RegisterAccess>(
-                    value: _addAccess,
-                    decoration: const InputDecoration(labelText: 'Access'),
-                    items: const <DropdownMenuItem<RegisterAccess>>[
-                      DropdownMenuItem<RegisterAccess>(value: RegisterAccess.read, child: Text('R (Read)')),
-                      DropdownMenuItem<RegisterAccess>(value: RegisterAccess.write, child: Text('W (Write)')),
-                      DropdownMenuItem<RegisterAccess>(value: RegisterAccess.readWrite, child: Text('RW (Read/Write)')),
-                    ],
-                    onChanged: (RegisterAccess? value) {
-                      if (value == null) {
-                        return;
-                      }
-                      setState(() {
-                        _addAccess = value;
-                      });
-                    },
-                  ),
-                ),
-              ],
-            ),
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButtonFormField<RegisterValueType>(
-                    value: _addType,
-                    decoration: const InputDecoration(labelText: 'Type'),
-                    items: RegisterValueType.values
-                        .map(
-                          (RegisterValueType type) => DropdownMenuItem<RegisterValueType>(
-                            value: type,
-                            child: Text(type.name),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (RegisterValueType? value) {
-                      if (value == null) {
-                        return;
-                      }
-                      setState(() {
-                        _addType = value;
-                        if (_addType != RegisterValueType.word) {
-                          _addLenController.text = '1';
-                        }
-                      });
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: _addLenController,
-                    decoration: InputDecoration(
-                      labelText: _addType == RegisterValueType.word ? 'Words count' : 'Words count (fixed 1)',
-                    ),
-                    keyboardType: TextInputType.number,
-                    enabled: _addType == RegisterValueType.word,
-                  ),
-                ),
-              ],
-            ),
-            TextField(
-              controller: _addIndexController,
-              decoration: InputDecoration(
-                labelText: _addType == RegisterValueType.bit
-                    ? 'Bit index (0..15)'
-                    : _addType == RegisterValueType.byte
-                        ? 'Byte index (0..1)'
-                        : 'Index (0)',
-              ),
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 6),
-            FilledButton(onPressed: _addRange, child: const Text('Add address/range')),
           ],
         ),
       ),
