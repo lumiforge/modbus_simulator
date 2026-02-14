@@ -181,6 +181,8 @@ class SparseHoldingRegisterBank {
     if (count <= 0 || start < 0) {
       return false;
     }
+
+
     for (int i = 0; i < count; i++) {
       final int addr = start + i;
       final RegisterAccess? access = _accessByAddress[addr];
@@ -255,6 +257,10 @@ class ModbusLogEntry {
     required this.startAddress,
     required this.length,
     required this.result,
+    this.byteCount,
+    required this.transactionId,
+    required this.unitId,
+    this.pduHex,
   });
 
   final DateTime timestamp;
@@ -263,6 +269,10 @@ class ModbusLogEntry {
   final int startAddress;
   final int length;
   final String result;
+  final int? byteCount;
+  final int transactionId;
+  final int unitId;
+  final String? pduHex;
 }
 
 class ModbusTcpServer {
@@ -378,12 +388,13 @@ class ModbusTcpServer {
         break;
       default:
         _sendException(client, transactionId, unitId, functionCode, 0x01);
-        _log(clientId, functionCode, 0, 0, 'exception');
+        _log(clientId, transactionId, unitId, functionCode, 0, 0, 'exception', pdu: pdu);
     }
   }
 
   void _handleReadHoldingRegisters(Socket client, int tid, int unitId, Uint8List pdu, String clientId) {
     if (pdu.length != 5) {
+      _log(clientId, tid, unitId, 3, 0, 0, 'malformed', pdu: pdu);
       return;
     }
 
@@ -394,7 +405,7 @@ class ModbusTcpServer {
     final List<int>? values = bank.readRange(start, count);
     if (values == null) {
       _sendException(client, tid, unitId, 3, 0x02);
-      _log(clientId, 3, start, count, 'exception');
+      _log(clientId, tid, unitId, 3, start, count, 'exception', pdu: pdu);
       return;
     }
 
@@ -405,11 +416,12 @@ class ModbusTcpServer {
     }
 
     _sendResponse(client, tid, unitId, responsePdu.toBytes());
-    _log(clientId, 3, start, count, 'ok');
+    _log(clientId, tid, unitId, 3, start, count, 'ok', pdu: pdu);
   }
 
   void _handleWriteSingleRegister(Socket client, int tid, int unitId, Uint8List pdu, String clientId) {
     if (pdu.length != 5) {
+      _log(clientId, tid, unitId, 6, 0, 0, 'malformed', pdu: pdu);
       return;
     }
 
@@ -419,17 +431,18 @@ class ModbusTcpServer {
 
     if (!bank.writeSingle(unitId, address, value, enforceAccess: true)) {
       _sendException(client, tid, unitId, 6, 0x02);
-      _log(clientId, 6, address, 1, 'exception');
+      _log(clientId, tid, unitId, 6, address, 1, 'exception', pdu: pdu);
       return;
     }
 
     _sendResponse(client, tid, unitId, pdu);
-    _log(clientId, 6, address, 1, 'ok');
+    _log(clientId, tid, unitId, 6, address, 1, 'ok', pdu: pdu);
     onRegistersChanged();
   }
 
   void _handleWriteMultipleRegisters(Socket client, int tid, int unitId, Uint8List pdu, String clientId) {
     if (pdu.length < 6) {
+      _log(clientId, tid, unitId, 16, 0, 0, 'malformed', pdu: pdu);
       return;
     }
 
@@ -439,6 +452,7 @@ class ModbusTcpServer {
     final int byteCount = pdu[5];
 
     if (pdu.length != 6 + byteCount || byteCount != count * 2) {
+      _log(clientId, tid, unitId, 16, start, count, 'malformed', byteCount: byteCount, pdu: pdu);
       return;
     }
 
@@ -450,7 +464,7 @@ class ModbusTcpServer {
 
     if (!bank.writeMultiple(unitId, start, values, enforceAccess: true)) {
       _sendException(client, tid, unitId, 16, 0x02);
-      _log(clientId, 16, start, count, 'exception');
+      _log(clientId, tid, unitId, 16, start, count, 'exception', byteCount: byteCount, pdu: pdu);
       return;
     }
 
@@ -460,7 +474,7 @@ class ModbusTcpServer {
       unitId,
       Uint8List.fromList(<int>[16, (start >> 8) & 0xFF, start & 0xFF, (count >> 8) & 0xFF, count & 0xFF]),
     );
-    _log(clientId, 16, start, count, 'ok');
+    _log(clientId, tid, unitId, 16, start, count, 'ok', byteCount: byteCount, pdu: pdu);
     onRegistersChanged();
   }
 
@@ -480,7 +494,21 @@ class ModbusTcpServer {
     client.add(frame.toBytes());
   }
 
-  void _log(String clientId, int fc, int start, int len, String result) {
+  String _toHex(Uint8List data) {
+    return data.map((int b) => b.toRadixString(16).toUpperCase().padLeft(2, '0')).join(' ');
+  }
+
+  void _log(
+    String clientId,
+    int transactionId,
+    int unitId,
+    int fc,
+    int start,
+    int len,
+    String result, {
+    int? byteCount,
+    Uint8List? pdu,
+  }) {
     onLog(
       ModbusLogEntry(
         timestamp: DateTime.now(),
@@ -489,6 +517,10 @@ class ModbusTcpServer {
         startAddress: start,
         length: len,
         result: result,
+        byteCount: byteCount,
+        transactionId: transactionId,
+        unitId: unitId,
+        pduHex: pdu == null ? null : _toHex(pdu),
       ),
     );
   }
@@ -1187,7 +1219,11 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
           return ListTile(
             dense: true,
             title: Text('$t ${e.client} FC${e.functionCode} ${e.result}'),
-            subtitle: Text('addr=${e.startAddress} len=${e.length}'),
+            subtitle: Text(
+              'tid=${e.transactionId} unit=${e.unitId} addr=${e.startAddress} count=${e.length}'
+              '${e.byteCount == null ? '' : ' byteCount=${e.byteCount}'}\n'
+              '${e.pduHex == null ? '' : 'pdu=${e.pduHex}'}',
+            ),
           );
         },
       ),
