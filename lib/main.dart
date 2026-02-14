@@ -765,12 +765,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     }
 
     final String rawPath = selectedPath.trim();
-    if (rawPath.isEmpty) {
-      setState(() {
-        _status = 'Import error: empty YAML file path';
-      });
-      return;
-    }
 
     try {
       final File input = File(rawPath);
@@ -796,7 +790,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
 
         if (name.isEmpty || address == null || address < 0 || access == null || type == null || length < 1 || index < 0) {
           setState(() {
-            _status = 'Import error: некорректная запись в YAML';
+            _status = 'Ошибка импорта: некорректная запись в YAML';
           });
           return;
         }
@@ -830,7 +824,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
         final bool added = _bank.addRange(range.start, range.storageLength, range.access);
         if (!added) {
           setState(() {
-            _status = 'Import error: пересечение адресов в YAML';
+            _status = 'Ошибка импорта: пересечение адресов в YAML';
           });
           return;
         }
@@ -861,14 +855,14 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
         return;
       }
       setState(() {
-        _status = 'Import error: ${e.message}';
+        _status = 'Ошибка импорта: ${e.message}';
       });
     } on FormatException {
       if (!mounted) {
         return;
       }
       setState(() {
-        _status = 'Import error: неверный формат YAML';
+        _status = 'Ошибка импорта: неверный формат YAML';
       });
     }
   }
