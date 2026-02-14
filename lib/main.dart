@@ -516,7 +516,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   final TextEditingController _addStartController = TextEditingController();
   final TextEditingController _addLenController = TextEditingController(text: '1');
   final TextEditingController _addIndexController = TextEditingController(text: '0');
-  final TextEditingController _yamlExportPathController = TextEditingController(text: 'inputs_config.yaml');
+  final TextEditingController _yamlExportPathController = TextEditingController(text: 'examples/registers_config.yaml');
   RegisterValueType _addType = RegisterValueType.word;
   RegisterAccess _addAccess = RegisterAccess.readWrite;
 
@@ -531,7 +531,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     _bank = SparseHoldingRegisterBank((int unitId, int addr, List<int> values) {
       _sink.addWrite(unitId: unitId, addr: addr, values: values);
     });
-
 
     _server = ModbusTcpServer(bank: _bank, onRegistersChanged: _refresh, onLog: _addReqLog);
 
@@ -744,7 +743,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     return value.replaceAll("'", "''");
   }
 
-  Future<void> _exportRangesToYaml() async {
+  Future<void> _exportConfigToYaml() async {
     final String rawPath = _yamlExportPathController.text.trim();
     if (rawPath.isEmpty) {
       setState(() {
@@ -755,7 +754,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
 
     final StringBuffer yaml = StringBuffer()
       ..writeln('version: 1')
-      ..writeln('generated_at: ${DateTime.now().toUtc().toIso8601String()}')
       ..writeln('inputs:');
 
     for (final RegisterRange range in _ranges) {
@@ -765,9 +763,14 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
         ..writeln('    address: ${range.start}')
         ..writeln('    access: ${_registerAccessToYaml(range.access)}')
         ..writeln('    value_type: ${_registerTypeToYaml(range.valueType)}')
-        ..writeln('    length: ${range.length}')
-        ..writeln('    index: ${range.valueIndex}')
-        ..writeln('    values: [${(values ?? <int>[]).join(', ')}]');
+        ..writeln('    length: ${range.length}');
+      if (range.valueType != RegisterValueType.word || range.valueIndex != 0) {
+        yaml.writeln('    index: ${range.valueIndex}');
+      }
+      if (values != null && values.any((int value) => value != 0)) {
+        yaml.writeln('    values: [${values.join(', ')}]');
+      }
+      yaml.writeln();
     }
 
     try {
@@ -1019,10 +1022,17 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
             const SizedBox(height: 10),
             TextField(
               controller: _yamlExportPathController,
-              decoration: const InputDecoration(labelText: 'YAML export path'),
+              decoration: const InputDecoration(
+                labelText: 'YAML export path',
+                helperText: 'Example format: examples/registers_config.example.yaml',
+              ),
             ),
             const SizedBox(height: 6),
-            OutlinedButton(onPressed: _exportRangesToYaml, child: const Text('Export inputs to YAML')),
+            FilledButton.icon(
+              onPressed: _exportConfigToYaml,
+              icon: const Icon(Icons.download),
+              label: const Text('Экспортировать YAML конфигурацию'),
+            ),
           ],
         ),
       ),
