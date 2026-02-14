@@ -177,7 +177,7 @@ class SparseHoldingRegisterBank {
     }
   }
 
-  bool _validate(int start, int count, {required bool forWrite}) {
+  bool _validate(int start, int count, {required bool forWrite, bool enforceWriteAccess = true}) {
     if (count <= 0 || start < 0) {
       return false;
     }
@@ -187,7 +187,7 @@ class SparseHoldingRegisterBank {
       if (access == null) {
         return false;
       }
-      if (forWrite && access == RegisterAccess.read) {
+      if (forWrite && enforceWriteAccess && access == RegisterAccess.read) {
         return false;
       }
       if (!forWrite && access == RegisterAccess.write) {
@@ -216,8 +216,8 @@ class SparseHoldingRegisterBank {
     return List<int>.generate(count, (int i) => _values[start + i] ?? 0);
   }
 
-  bool writeSingle(int unitId, int address, int value) {
-    if (!_validate(address, 1, forWrite: true)) {
+  bool writeSingle(int unitId, int address, int value, {bool enforceAccess = false}) {
+    if (!_validate(address, 1, forWrite: true, enforceWriteAccess: enforceAccess)) {
       return false;
     }
     _values[address] = value & 0xFFFF;
@@ -226,8 +226,8 @@ class SparseHoldingRegisterBank {
     return true;
   }
 
-  bool writeMultiple(int unitId, int start, List<int> values) {
-    if (!_validate(start, values.length, forWrite: true)) {
+  bool writeMultiple(int unitId, int start, List<int> values, {bool enforceAccess = false}) {
+    if (!_validate(start, values.length, forWrite: true, enforceWriteAccess: enforceAccess)) {
       return false;
     }
     for (int i = 0; i < values.length; i++) {
@@ -417,7 +417,7 @@ class ModbusTcpServer {
     final int address = body.getUint16(1);
     final int value = body.getUint16(3);
 
-    if (!bank.writeSingle(unitId, address, value)) {
+    if (!bank.writeSingle(unitId, address, value, enforceAccess: true)) {
       _sendException(client, tid, unitId, 6, 0x02);
       _log(clientId, 6, address, 1, 'exception');
       return;
@@ -448,7 +448,7 @@ class ModbusTcpServer {
       values.add((pdu[offset] << 8) | pdu[offset + 1]);
     }
 
-    if (!bank.writeMultiple(unitId, start, values)) {
+    if (!bank.writeMultiple(unitId, start, values, enforceAccess: true)) {
       _sendException(client, tid, unitId, 16, 0x02);
       _log(clientId, 16, start, count, 'exception');
       return;
@@ -620,10 +620,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   }
 
   void _writeRangeValue(RegisterRange range) {
-    if (range.access == RegisterAccess.read) {
-      return;
-    }
-
     final TextEditingController? controller = _rangeValueControllers[range.start];
     if (controller == null) {
       return;
@@ -1154,7 +1150,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                               const SizedBox(height: 4),
                               TextField(
                                 controller: valueController,
-                                enabled: range.access != RegisterAccess.read,
+                                enabled: true,
                                 decoration: const InputDecoration(
                                   isDense: true,
                                   labelText: 'New value (number or [..])',
@@ -1162,7 +1158,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                               ),
                               const SizedBox(height: 4),
                               FilledButton(
-                                onPressed: range.access == RegisterAccess.read ? null : () => _writeRangeValue(range),
+                                onPressed: () => _writeRangeValue(range),
                                 child: const Text('Write value'),
                               ),
                             ],
