@@ -5,7 +5,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
-const int modbusPortDefault = 1502;
+const int modbusPortDefault = 502;
 const int uiTailKeep = 2000;
 
 const int addrIoIn = 0x088B;
