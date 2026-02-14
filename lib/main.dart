@@ -73,7 +73,7 @@ class RegisterRange {
   }
 
   String displayValue(SparseHoldingRegisterBank bank) {
-    final List<int>? values = bank.readRange(start, storageLength);
+    final List<int>? values = bank.readRangeRaw(start, storageLength);
     if (values == null || values.isEmpty) {
       return 'ERR';
     }
@@ -199,6 +199,18 @@ class SparseHoldingRegisterBank {
   List<int>? readRange(int start, int count) {
     if (!_validate(start, count, forWrite: false)) {
       return null;
+    }
+    return readRangeRaw(start, count);
+  }
+
+  List<int>? readRangeRaw(int start, int count) {
+    if (count <= 0 || start < 0) {
+      return null;
+    }
+    for (int i = 0; i < count; i++) {
+      if (!_values.containsKey(start + i)) {
+        return null;
+      }
     }
     return List<int>.generate(count, (int i) => _values[start + i] ?? 0);
   }
@@ -559,8 +571,26 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   }
 
   void _refresh() {
+    _syncRangeValueControllers();
     if (mounted) {
       setState(() {});
+    }
+  }
+
+  void _syncRangeValueControllers() {
+    for (final RegisterRange range in _ranges) {
+      final TextEditingController? controller = _rangeValueControllers[range.start];
+      if (controller == null) {
+        continue;
+      }
+      final List<int>? values = _bank.readRangeRaw(range.start, range.storageLength);
+      if (values == null) {
+        continue;
+      }
+      final String text = values.length == 1 ? values.first.toString() : jsonEncode(values);
+      if (controller.text != text) {
+        controller.text = text;
+      }
     }
   }
 
@@ -665,7 +695,9 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
 
     setState(() {
       _ranges.add(range);
-      _rangeValueControllers[start] = TextEditingController(text: safeLength > 1 ? '[0]' : '0');
+      _rangeValueControllers[start] = TextEditingController(
+        text: safeLength > 1 ? jsonEncode(List<int>.filled(safeLength, 0)) : '0',
+      );
       _addNameController.clear();
       _addStartController.clear();
       _addLenController.text = '1';
@@ -715,11 +747,11 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
             ),
             const SizedBox(height: 12),
             Expanded(
-              child: Row(
+              child: Column(
                 children: [
-                  Expanded(flex: 2, child: _buildWritesPanel(writes)),
-                  const SizedBox(width: 12),
                   Expanded(flex: 3, child: _buildRangesPanel()),
+                  const SizedBox(height: 12),
+                  Expanded(flex: 2, child: _buildWritesPanel(writes)),
                 ],
               ),
             ),
