@@ -255,6 +255,9 @@ class ModbusLogEntry {
     required this.startAddress,
     required this.length,
     required this.result,
+    required this.mbapHeader,
+    required this.modbusRequest,
+    required this.requestApu,
   });
 
   final DateTime timestamp;
@@ -263,6 +266,9 @@ class ModbusLogEntry {
   final int startAddress;
   final int length;
   final String result;
+  final String mbapHeader;
+  final String modbusRequest;
+  final String requestApu;
 }
 
 class ModbusTcpServer {
@@ -365,24 +371,43 @@ class ModbusTcpServer {
 
     final int functionCode = pdu[0];
     final String clientId = '${client.remoteAddress.address}:${client.remotePort}';
+    final ByteData header = ByteData.sublistView(data, 0, 6);
+    final String mbapHeader =
+        'TID=0x${header.getUint16(0).toRadixString(16).toUpperCase().padLeft(4, '0')} '
+        'PID=0x${header.getUint16(2).toRadixString(16).toUpperCase().padLeft(4, '0')} '
+        'LEN=0x${header.getUint16(4).toRadixString(16).toUpperCase().padLeft(4, '0')} '
+        'UID=0x${unitId.toRadixString(16).toUpperCase().padLeft(2, '0')}';
+    final String modbusRequest =
+        'FC=0x${functionCode.toRadixString(16).toUpperCase().padLeft(2, '0')} '
+        'PDU=${_formatBytesHex(pdu)}';
+    final String requestApu = _formatBytesHex(data);
 
     switch (functionCode) {
       case 3:
-        _handleReadHoldingRegisters(client, transactionId, unitId, pdu, clientId);
+        _handleReadHoldingRegisters(client, transactionId, unitId, pdu, clientId, mbapHeader, modbusRequest, requestApu);
         break;
       case 6:
-        _handleWriteSingleRegister(client, transactionId, unitId, pdu, clientId);
+        _handleWriteSingleRegister(client, transactionId, unitId, pdu, clientId, mbapHeader, modbusRequest, requestApu);
         break;
       case 16:
-        _handleWriteMultipleRegisters(client, transactionId, unitId, pdu, clientId);
+        _handleWriteMultipleRegisters(client, transactionId, unitId, pdu, clientId, mbapHeader, modbusRequest, requestApu);
         break;
       default:
         _sendException(client, transactionId, unitId, functionCode, 0x01);
-        _log(clientId, functionCode, 0, 0, 'exception');
+        _log(clientId, functionCode, 0, 0, 'exception', mbapHeader, modbusRequest, requestApu);
     }
   }
 
-  void _handleReadHoldingRegisters(Socket client, int tid, int unitId, Uint8List pdu, String clientId) {
+  void _handleReadHoldingRegisters(
+    Socket client,
+    int tid,
+    int unitId,
+    Uint8List pdu,
+    String clientId,
+    String mbapHeader,
+    String modbusRequest,
+    String requestApu,
+  ) {
     if (pdu.length != 5) {
       return;
     }
@@ -394,7 +419,7 @@ class ModbusTcpServer {
     final List<int>? values = bank.readRange(start, count);
     if (values == null) {
       _sendException(client, tid, unitId, 3, 0x02);
-      _log(clientId, 3, start, count, 'exception');
+      _log(clientId, 3, start, count, 'exception', mbapHeader, modbusRequest, requestApu);
       return;
     }
 
@@ -405,10 +430,19 @@ class ModbusTcpServer {
     }
 
     _sendResponse(client, tid, unitId, responsePdu.toBytes());
-    _log(clientId, 3, start, count, 'ok');
+    _log(clientId, 3, start, count, 'ok', mbapHeader, modbusRequest, requestApu);
   }
 
-  void _handleWriteSingleRegister(Socket client, int tid, int unitId, Uint8List pdu, String clientId) {
+  void _handleWriteSingleRegister(
+    Socket client,
+    int tid,
+    int unitId,
+    Uint8List pdu,
+    String clientId,
+    String mbapHeader,
+    String modbusRequest,
+    String requestApu,
+  ) {
     if (pdu.length != 5) {
       return;
     }
@@ -419,16 +453,25 @@ class ModbusTcpServer {
 
     if (!bank.writeSingle(unitId, address, value, enforceAccess: true)) {
       _sendException(client, tid, unitId, 6, 0x02);
-      _log(clientId, 6, address, 1, 'exception');
+      _log(clientId, 6, address, 1, 'exception', mbapHeader, modbusRequest, requestApu);
       return;
     }
 
     _sendResponse(client, tid, unitId, pdu);
-    _log(clientId, 6, address, 1, 'ok');
+    _log(clientId, 6, address, 1, 'ok', mbapHeader, modbusRequest, requestApu);
     onRegistersChanged();
   }
 
-  void _handleWriteMultipleRegisters(Socket client, int tid, int unitId, Uint8List pdu, String clientId) {
+  void _handleWriteMultipleRegisters(
+    Socket client,
+    int tid,
+    int unitId,
+    Uint8List pdu,
+    String clientId,
+    String mbapHeader,
+    String modbusRequest,
+    String requestApu,
+  ) {
     if (pdu.length < 6) {
       return;
     }
@@ -450,7 +493,7 @@ class ModbusTcpServer {
 
     if (!bank.writeMultiple(unitId, start, values, enforceAccess: true)) {
       _sendException(client, tid, unitId, 16, 0x02);
-      _log(clientId, 16, start, count, 'exception');
+      _log(clientId, 16, start, count, 'exception', mbapHeader, modbusRequest, requestApu);
       return;
     }
 
@@ -460,7 +503,7 @@ class ModbusTcpServer {
       unitId,
       Uint8List.fromList(<int>[16, (start >> 8) & 0xFF, start & 0xFF, (count >> 8) & 0xFF, count & 0xFF]),
     );
-    _log(clientId, 16, start, count, 'ok');
+    _log(clientId, 16, start, count, 'ok', mbapHeader, modbusRequest, requestApu);
     onRegistersChanged();
   }
 
@@ -480,7 +523,20 @@ class ModbusTcpServer {
     client.add(frame.toBytes());
   }
 
-  void _log(String clientId, int fc, int start, int len, String result) {
+  String _formatBytesHex(Uint8List bytes) {
+    return bytes.map((int b) => b.toRadixString(16).toUpperCase().padLeft(2, '0')).join(' ');
+  }
+
+  void _log(
+    String clientId,
+    int fc,
+    int start,
+    int len,
+    String result,
+    String mbapHeader,
+    String modbusRequest,
+    String requestApu,
+  ) {
     onLog(
       ModbusLogEntry(
         timestamp: DateTime.now(),
@@ -489,6 +545,9 @@ class ModbusTcpServer {
         startAddress: start,
         length: len,
         result: result,
+        mbapHeader: mbapHeader,
+        modbusRequest: modbusRequest,
+        requestApu: requestApu,
       ),
     );
   }
@@ -507,6 +566,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   late final SparseHoldingRegisterBank _bank;
   late final ModbusTcpServer _server;
   late final Timer _uiTimer;
+  Timer? _requestLogUiTimer;
   final EventSink _sink = EventSink();
 
   final List<RegisterRange> _ranges = <RegisterRange>[];
@@ -515,6 +575,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   final TextEditingController _portController = TextEditingController(text: '$modbusPortDefault');
 
   final List<ModbusLogEntry> _requestLog = <ModbusLogEntry>[];
+  bool _logsVisible = false;
 
   int _port = modbusPortDefault;
   String _status = 'Stopped';
@@ -540,6 +601,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   @override
   void dispose() {
     _uiTimer.cancel();
+    _requestLogUiTimer?.cancel();
     _server.stop();
     _portController.dispose();
     for (final TextEditingController controller in _rangeValueControllers.values) {
@@ -549,13 +611,22 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   }
 
   void _addReqLog(ModbusLogEntry entry) {
-    if (!mounted) {
+    _requestLog.insert(0, entry);
+    if (_requestLog.length > 200) {
+      _requestLog.removeLast();
+    }
+
+    if (!mounted || !_logsVisible) {
       return;
     }
-    setState(() {
-      _requestLog.insert(0, entry);
-      if (_requestLog.length > 200) {
-        _requestLog.removeLast();
+
+    if (_requestLogUiTimer?.isActive ?? false) {
+      return;
+    }
+
+    _requestLogUiTimer = Timer(const Duration(milliseconds: 80), () {
+      if (mounted && _logsVisible) {
+        setState(() {});
       }
     });
   }
@@ -1031,24 +1102,37 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
               ],
             ),
             const SizedBox(height: 12),
-            Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(flex: 4, child: _buildRangesPanel()),
-                  const SizedBox(width: 12),
-                  SizedBox(
-                    width: 420,
-                    child: Column(
-                      children: [
-                        Expanded(child: _buildWritesPanel(writes)),
-                        const SizedBox(height: 8),
-                        SizedBox(height: 170, child: _buildRequestPanel()),
-                      ],
-                    ),
-                  ),
-                ],
+            Expanded(child: _buildRangesPanel()),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _logsVisible = !_logsVisible;
+                  });
+                },
+                icon: Icon(_logsVisible ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up),
+                label: Text(_logsVisible ? 'Скрыть логи' : 'Открыть логи'),
               ),
+            ),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOut,
+              height: _logsVisible ? 260 : 0,
+              child: _logsVisible
+                  ? Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(child: _buildWritesPanel(writes)),
+                          const SizedBox(width: 12),
+                          Expanded(child: _buildRequestPanel()),
+                        ],
+                      ),
+                    )
+                  : null,
             ),
           ],
         ),
@@ -1178,18 +1262,37 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
 
   Widget _buildRequestPanel() {
     return Card(
-      child: ListView.builder(
-        itemCount: _requestLog.length,
-        itemBuilder: (BuildContext context, int index) {
-          final ModbusLogEntry e = _requestLog[index];
-          final String t =
-              '${e.timestamp.hour.toString().padLeft(2, '0')}:${e.timestamp.minute.toString().padLeft(2, '0')}:${e.timestamp.second.toString().padLeft(2, '0')}';
-          return ListTile(
-            dense: true,
-            title: Text('$t ${e.client} FC${e.functionCode} ${e.result}'),
-            subtitle: Text('addr=${e.startAddress} len=${e.length}'),
-          );
-        },
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Request Logs (MBAP + Modbus Request APU)', style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            Expanded(
+              child: ListView.builder(
+                itemCount: _requestLog.length,
+                itemBuilder: (BuildContext context, int index) {
+                  final ModbusLogEntry e = _requestLog[index];
+                  final String t =
+                      '${e.timestamp.hour.toString().padLeft(2, '0')}:${e.timestamp.minute.toString().padLeft(2, '0')}:${e.timestamp.second.toString().padLeft(2, '0')}';
+                  return ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('$t ${e.client} FC${e.functionCode} ${e.result}'),
+                    subtitle: Text(
+                      'addr=${e.startAddress} len=${e.length}\n'
+                      'MBAP: ${e.mbapHeader}\n'
+                      'Modbus request: ${e.modbusRequest}\n'
+                      'Request APU: ${e.requestApu}',
+                      style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
