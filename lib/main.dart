@@ -575,7 +575,9 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   final TextEditingController _portController = TextEditingController(text: '$modbusPortDefault');
 
   final List<ModbusLogEntry> _requestLog = <ModbusLogEntry>[];
+  List<ModbusLogEntry> _requestLogView = <ModbusLogEntry>[];
   bool _logsVisible = false;
+  bool _requestLogPaused = false;
 
   int _port = modbusPortDefault;
   String _status = 'Stopped';
@@ -616,6 +618,10 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
       _requestLog.removeLast();
     }
 
+    if (!_requestLogPaused) {
+      _requestLogView = List<ModbusLogEntry>.from(_requestLog);
+    }
+
     if (!mounted || !_logsVisible) {
       return;
     }
@@ -625,8 +631,17 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     }
 
     _requestLogUiTimer = Timer(const Duration(milliseconds: 80), () {
-      if (mounted && _logsVisible) {
+      if (mounted && _logsVisible && !_requestLogPaused) {
         setState(() {});
+      }
+    });
+  }
+
+  void _toggleRequestLogPause() {
+    setState(() {
+      _requestLogPaused = !_requestLogPaused;
+      if (!_requestLogPaused) {
+        _requestLogView = List<ModbusLogEntry>.from(_requestLog);
       }
     });
   }
@@ -1197,14 +1212,14 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                       crossAxisCount: columns,
                       crossAxisSpacing: 8,
                       mainAxisSpacing: 8,
-                      childAspectRatio: 1.8,
+                      childAspectRatio: 2.3,
                     ),
                     itemBuilder: (BuildContext context, int index) {
                       final RegisterRange range = _ranges[index];
                       final bool changed = range.isChanged(_bank, highlightWindow);
                       final TextEditingController? valueController = _rangeValueControllers[range.start];
                       return Container(
-                        padding: const EdgeInsets.all(8),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                         decoration: BoxDecoration(
                           border: Border.all(color: Colors.white24),
                           color: changed ? Colors.yellow.withValues(alpha: 0.18) : null,
@@ -1231,7 +1246,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                             ),
                             Text('Current: ${range.displayValue(_bank)}', style: const TextStyle(fontSize: 12), maxLines: 2),
                             if (valueController != null) ...<Widget>[
-                              const SizedBox(height: 4),
+                              const SizedBox(height: 2),
                               TextField(
                                 controller: valueController,
                                 enabled: true,
@@ -1240,10 +1255,13 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                                   labelText: 'New value (number or [..])',
                                 ),
                               ),
-                              const SizedBox(height: 4),
-                              FilledButton(
-                                onPressed: () => _writeRangeValue(range),
-                                child: const Text('Write value'),
+                              const SizedBox(height: 2),
+                              SizedBox(
+                                height: 32,
+                                child: FilledButton(
+                                  onPressed: () => _writeRangeValue(range),
+                                  child: const Text('Write value'),
+                                ),
                               ),
                             ],
                           ],
@@ -1269,11 +1287,19 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
           children: [
             const Text('Request Logs (MBAP + Modbus Request APU)', style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: _toggleRequestLogPause,
+                icon: Icon(_requestLogPaused ? Icons.play_arrow : Icons.pause),
+                label: Text(_requestLogPaused ? 'Resume' : 'Pause'),
+              ),
+            ),
             Expanded(
               child: ListView.builder(
-                itemCount: _requestLog.length,
+                itemCount: _requestLogView.length,
                 itemBuilder: (BuildContext context, int index) {
-                  final ModbusLogEntry e = _requestLog[index];
+                  final ModbusLogEntry e = _requestLogView[index];
                   final String t =
                       '${e.timestamp.hour.toString().padLeft(2, '0')}:${e.timestamp.minute.toString().padLeft(2, '0')}:${e.timestamp.second.toString().padLeft(2, '0')}';
                   return ListTile(
