@@ -8,7 +8,7 @@ inputs:
 
   - name: 'IO board output'
     address: 2227
-    access: read
+    access: read_write
     value_type: word
     length: 10
 
