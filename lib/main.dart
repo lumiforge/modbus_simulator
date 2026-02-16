@@ -987,6 +987,9 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   bool _logsVisible = false;
   bool _requestLogPaused = false;
 
+  bool get _useImmediateMouseDrag =>
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
   int _port = modbusPortDefault;
   int _serverId = 1;
   int _addressOffset = 0;
@@ -2168,57 +2171,61 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                           List<dynamic> rejectedData,
                         ) {
                           final bool isDropTarget = candidateData.isNotEmpty;
+
+                          Widget buildDragCard() => _buildRangeCard(
+                            range: range,
+                            index: index,
+                            changed: changed,
+                            valueControllers: valueControllers,
+                            focusNodes: focusNodes,
+                            currentValues: currentValues,
+                          );
+
+                          final Widget feedbackCard = Material(
+                            color: Colors.transparent,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints.tightFor(
+                                width: 320,
+                                height: 140,
+                              ),
+                              child: Opacity(
+                                opacity: 0.88,
+                                child: buildDragCard(),
+                              ),
+                            ),
+                          );
+
+                          final Widget dragTargetCard = DecoratedBox(
+                            decoration: BoxDecoration(
+                              border: isDropTarget
+                                  ? Border.all(
+                                      color: Colors.lightBlueAccent,
+                                      width: 2,
+                                    )
+                                  : null,
+                            ),
+                            child: buildDragCard(),
+                          );
+
+                          final Widget cardPlaceholder = Opacity(
+                            opacity: 0.35,
+                            child: buildDragCard(),
+                          );
+
+                          if (_useImmediateMouseDrag) {
+                            return Draggable<int>(
+                              data: index,
+                              feedback: feedbackCard,
+                              childWhenDragging: cardPlaceholder,
+                              child: dragTargetCard,
+                            );
+                          }
+
                           return LongPressDraggable<int>(
                             data: index,
-                            feedback: Material(
-                              color: Colors.transparent,
-                              child: ConstrainedBox(
-                                constraints: const BoxConstraints(
-                                  maxWidth: 360,
-                                  minWidth: 220,
-                                ),
-                                child: Opacity(
-                                  opacity: 0.88,
-                                  child: _buildRangeCard(
-                                    range: range,
-                                    index: index,
-                                    changed: changed,
-                                    valueControllers: valueControllers,
-                                    focusNodes: focusNodes,
-                                    currentValues: currentValues,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            childWhenDragging: Opacity(
-                              opacity: 0.35,
-                              child: _buildRangeCard(
-                                range: range,
-                                index: index,
-                                changed: changed,
-                                valueControllers: valueControllers,
-                                focusNodes: focusNodes,
-                                currentValues: currentValues,
-                              ),
-                            ),
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                border: isDropTarget
-                                    ? Border.all(
-                                        color: Colors.lightBlueAccent,
-                                        width: 2,
-                                      )
-                                    : null,
-                              ),
-                              child: _buildRangeCard(
-                                range: range,
-                                index: index,
-                                changed: changed,
-                                valueControllers: valueControllers,
-                                focusNodes: focusNodes,
-                                currentValues: currentValues,
-                              ),
-                            ),
+                            feedback: feedbackCard,
+                            childWhenDragging: cardPlaceholder,
+                            child: dragTargetCard,
                           );
                         },
                       );
