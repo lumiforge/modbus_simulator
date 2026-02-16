@@ -1166,6 +1166,16 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     return file?.path;
   }
 
+  Future<String?> _selectYamlExportPath() async {
+    final FileSaveLocation? saveLocation = await getSaveLocation(
+      acceptedTypeGroups: <XTypeGroup>[
+        const XTypeGroup(label: 'YAML', extensions: <String>['yaml', 'yml']),
+      ],
+      suggestedName: 'modbus_config.yaml',
+    );
+    return saveLocation?.path;
+  }
+
   RegisterAccess? _parseYamlAccess(String value) {
     switch (value.trim()) {
       case 'read':
@@ -1231,6 +1241,32 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     }
   }
 
+  String _yamlEscapeSingleQuoted(String value) {
+    return value.replaceAll("'", "''");
+  }
+
+  String _yamlAccessValue(RegisterAccess access) {
+    switch (access) {
+      case RegisterAccess.read:
+        return 'read';
+      case RegisterAccess.write:
+        return 'write';
+      case RegisterAccess.readWrite:
+        return 'read_write';
+    }
+  }
+
+  String _yamlValueType(RegisterValueType type) {
+    switch (type) {
+      case RegisterValueType.bit:
+        return 'bit';
+      case RegisterValueType.byte:
+        return 'byte';
+      case RegisterValueType.word:
+        return 'word';
+    }
+  }
+
   List<Map<String, String>> _parseInputItems(String content) {
     final List<Map<String, String>> items = <Map<String, String>>[];
     Map<String, String>? current;
@@ -1282,6 +1318,60 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
       return <int>[];
     }
     return inner.split(',').map((String e) => int.parse(e.trim())).toList();
+  }
+
+  Future<void> _exportConfigToYaml() async {
+    final String? selectedPath = await _selectYamlExportPath();
+    if (selectedPath == null || selectedPath.trim().isEmpty) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = 'Экспорт отменён';
+      });
+      return;
+    }
+
+    try {
+      final StringBuffer yaml = StringBuffer()
+        ..writeln("server_name: '${_yamlEscapeSingleQuoted(_serverName)}'")
+        ..writeln('port: $_port')
+        ..writeln('server_id: $_serverId')
+        ..writeln('byte_order: ${_byteOrderMode.yamlValue}')
+        ..writeln('address_offset: $_addressOffset')
+        ..writeln('inputs:');
+
+      for (final RegisterRange range in _ranges) {
+        final List<int> values =
+            _bank.readRangeRaw(range.start, range.storageLength) ??
+            List<int>.filled(range.storageLength, 0);
+        yaml
+          ..writeln("  - name: '${_yamlEscapeSingleQuoted(range.name)}'")
+          ..writeln('    address: ${range.start}')
+          ..writeln('    access: ${_yamlAccessValue(range.access)}')
+          ..writeln('    length: ${range.length}')
+          ..writeln('    value_type: ${_yamlValueType(range.valueType)}')
+          ..writeln('    index: ${range.valueIndex}')
+          ..writeln('    values: [${values.join(', ')}]');
+      }
+
+      final File output = File(selectedPath.trim());
+      await output.writeAsString(yaml.toString());
+
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = 'Конфигурация сохранена в ${output.path}';
+      });
+    } on FileSystemException catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = 'Ошибка экспорта: ${e.message}';
+      });
+    }
   }
 
   Future<void> _importConfigFromYaml() async {
@@ -1505,6 +1595,11 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                   onPressed: _importConfigFromYaml,
                   icon: const Icon(Icons.download),
                   label: const Text('Импорт YAML'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _exportConfigToYaml,
+                  icon: const Icon(Icons.upload_file),
+                  label: const Text('Экспорт YAML'),
                 ),
                 Text(_status),
               ],
