@@ -13,6 +13,8 @@ void main() {
   runApp(const ModbusSimulatorApp());
 }
 
+enum StartupAction { loadConfig, createServer }
+
 enum RegisterAccess { read, write, readWrite }
 
 class ModbusSimulatorApp extends StatelessWidget {
@@ -25,7 +27,170 @@ class ModbusSimulatorApp extends StatelessWidget {
       theme: ThemeData.dark().copyWith(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue, brightness: Brightness.dark),
       ),
-      home: const ModbusDashboard(),
+      home: const StartupScreen(),
+    );
+  }
+}
+
+class StartupScreen extends StatefulWidget {
+  const StartupScreen({super.key});
+
+  @override
+  State<StartupScreen> createState() => _StartupScreenState();
+}
+
+class _StartupScreenState extends State<StartupScreen> {
+  bool _scanInProgress = false;
+  String _scanStatus = 'Сканирование ещё не запускалось';
+  final List<String> _activeHosts = <String>[];
+
+  Future<void> _runLanScan() async {
+    setState(() {
+      _scanInProgress = true;
+      _scanStatus = 'Идёт сканирование локальной сети...';
+      _activeHosts.clear();
+    });
+
+    try {
+      final String? subnet = await _detectPrivateSubnetPrefix();
+      if (subnet == null) {
+        setState(() {
+          _scanStatus = 'Не удалось определить локальную подсеть';
+        });
+        return;
+      }
+
+      for (int i = 1; i <= 254; i++) {
+        final String host = '$subnet.$i';
+        if (await _pingHost(host)) {
+          _activeHosts.add(host);
+          if (mounted) {
+            setState(() {
+              _scanStatus = 'Найдено активных устройств: ${_activeHosts.length}';
+            });
+          }
+        }
+      }
+
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _scanStatus = _activeHosts.isEmpty
+            ? 'Активные устройства не найдены в подсети $subnet.0/24'
+            : 'Сканирование завершено: ${_activeHosts.length} устройств';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _scanInProgress = false;
+        });
+      }
+    }
+  }
+
+  Future<String?> _detectPrivateSubnetPrefix() async {
+    final List<NetworkInterface> interfaces = await NetworkInterface.list(
+      includeLoopback: false,
+      type: InternetAddressType.IPv4,
+    );
+
+    for (final NetworkInterface iface in interfaces) {
+      for (final InternetAddress address in iface.addresses) {
+        final List<String> octets = address.address.split('.');
+        if (octets.length != 4) {
+          continue;
+        }
+
+        final int first = int.tryParse(octets[0]) ?? -1;
+        final int second = int.tryParse(octets[1]) ?? -1;
+        final bool isPrivate = first == 10 || (first == 172 && second >= 16 && second <= 31) || (first == 192 && second == 168);
+        if (isPrivate) {
+          return '${octets[0]}.${octets[1]}.${octets[2]}';
+        }
+      }
+    }
+
+    return null;
+  }
+
+  Future<bool> _pingHost(String host) async {
+    final List<String> args;
+    if (Platform.isWindows) {
+      args = <String>['-n', '1', '-w', '120', host];
+    } else {
+      args = <String>['-c', '1', '-W', '1', host];
+    }
+
+    final ProcessResult result = await Process.run('ping', args);
+    return result.exitCode == 0;
+  }
+
+  void _openDashboard(StartupAction action) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => ModbusDashboard(startupAction: action),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Modbus Simulator — старт')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const Text(
+              'Выберите режим работы',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: <Widget>[
+                FilledButton.icon(
+                  onPressed: () => _openDashboard(StartupAction.loadConfig),
+                  icon: const Icon(Icons.upload_file),
+                  label: const Text('Загрузить конфигурацию Modbus TCP'),
+                ),
+                FilledButton.icon(
+                  onPressed: () => _openDashboard(StartupAction.createServer),
+                  icon: const Icon(Icons.add_circle_outline),
+                  label: const Text('Создать новый Modbus TCP сервер'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _scanInProgress ? null : _runLanScan,
+                  icon: const Icon(Icons.network_ping),
+                  label: const Text('Сканировать локальную сеть'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(_scanStatus),
+            const SizedBox(height: 8),
+            if (_scanInProgress) const LinearProgressIndicator(),
+            if (_activeHosts.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 12),
+              const Text('Активные устройства:', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: _activeHosts.length,
+                  itemBuilder: (BuildContext context, int index) => ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.computer),
+                    title: Text(_activeHosts[index]),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
@@ -554,7 +719,9 @@ class ModbusTcpServer {
 }
 
 class ModbusDashboard extends StatefulWidget {
-  const ModbusDashboard({super.key});
+  const ModbusDashboard({required this.startupAction, super.key});
+
+  final StartupAction startupAction;
 
   @override
   State<ModbusDashboard> createState() => _ModbusDashboardState();
@@ -597,7 +764,18 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
       }
     });
 
-    _startServer();
+    if (widget.startupAction == StartupAction.createServer) {
+      _startServer();
+    } else {
+      unawaited(_prepareDashboardWithConfig());
+    }
+  }
+
+  Future<void> _prepareDashboardWithConfig() async {
+    await _importConfigFromYaml();
+    if (_ranges.isNotEmpty) {
+      await _startServer();
+    }
   }
 
   @override
