@@ -41,12 +41,14 @@ class StartupScreen extends StatefulWidget {
 
 class _StartupScreenState extends State<StartupScreen> {
   bool _scanInProgress = false;
+  bool _scanCancelRequested = false;
   String _scanStatus = 'Сканирование ещё не запускалось';
   final List<String> _activeHosts = <String>[];
 
   Future<void> _runLanScan() async {
     setState(() {
       _scanInProgress = true;
+      _scanCancelRequested = false;
       _scanStatus = 'Идёт сканирование локальной сети...';
       _activeHosts.clear();
     });
@@ -61,6 +63,10 @@ class _StartupScreenState extends State<StartupScreen> {
       }
 
       for (int i = 1; i <= 254; i++) {
+        if (_scanCancelRequested) {
+          break;
+        }
+
         final String host = '$subnet.$i';
         if (await _pingHost(host)) {
           _activeHosts.add(host);
@@ -76,6 +82,13 @@ class _StartupScreenState extends State<StartupScreen> {
         return;
       }
       setState(() {
+        if (_scanCancelRequested) {
+          _scanStatus = _activeHosts.isEmpty
+              ? 'Сканирование остановлено пользователем'
+              : 'Сканирование остановлено: найдено ${_activeHosts.length} устройств';
+          return;
+        }
+
         _scanStatus = _activeHosts.isEmpty
             ? 'Активные устройства не найдены в подсети $subnet.0/24'
             : 'Сканирование завершено: ${_activeHosts.length} устройств';
@@ -87,6 +100,17 @@ class _StartupScreenState extends State<StartupScreen> {
         });
       }
     }
+  }
+
+  void _cancelLanScan() {
+    if (!_scanInProgress || _scanCancelRequested) {
+      return;
+    }
+
+    setState(() {
+      _scanCancelRequested = true;
+      _scanStatus = 'Останавливаем сканирование...';
+    });
   }
 
   Future<String?> _detectPrivateSubnetPrefix() async {
@@ -166,6 +190,11 @@ class _StartupScreenState extends State<StartupScreen> {
                   onPressed: _scanInProgress ? null : _runLanScan,
                   icon: const Icon(Icons.network_ping),
                   label: const Text('Сканировать локальную сеть'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _scanInProgress ? _cancelLanScan : null,
+                  icon: const Icon(Icons.stop_circle_outlined),
+                  label: const Text('Завершить сканирование'),
                 ),
               ],
             ),
