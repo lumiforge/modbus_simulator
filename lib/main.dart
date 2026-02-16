@@ -1234,80 +1234,13 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   }
 
   Future<void> _showBitEditor(RegisterRange range) async {
-    final int rowCount = range.storageLength;
-    final List<int> values = List<int>.from(
-      _bank.readRangeRaw(range.start, rowCount) ??
-          List<int>.filled(rowCount, 0),
-    );
-
-    final bool? shouldApply = await showDialog<bool>(
+    final List<int>? values = await showDialog<List<int>>(
       context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (BuildContext context, StateSetter setDialogState) {
-            return AlertDialog(
-              title: Text('Bits: ${range.name}'),
-              content: SizedBox(
-                width: 760,
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: List<Widget>.generate(rowCount, (int row) {
-                      final int value = values[row];
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Address ${range.start + row} | value=$value | 0x${value.toRadixString(16).toUpperCase().padLeft(4, '0')}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Wrap(
-                              spacing: 4,
-                              runSpacing: 4,
-                              children: List<Widget>.generate(16, (int offset) {
-                                final int bit = 15 - offset;
-                                final bool enabled =
-                                    ((values[row] >> bit) & 0x1) == 1;
-                                return FilterChip(
-                                  selected: enabled,
-                                  label: Text('b$bit:${enabled ? 1 : 0}'),
-                                  onSelected: (_) {
-                                    setDialogState(() {
-                                      values[row] = values[row] ^ (1 << bit);
-                                    });
-                                  },
-                                );
-                              }),
-                            ),
-                          ],
-                        ),
-                      );
-                    }),
-                  ),
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
-                  child: const Text('Отмена'),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.of(context).pop(true),
-                  child: const Text('Применить'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+      builder: (BuildContext context) =>
+          _BitEditorDialog(range: range, bank: _bank),
     );
 
-    if (shouldApply != true) {
+    if (values == null) {
       return;
     }
 
@@ -2384,6 +2317,124 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _BitEditorDialog extends StatefulWidget {
+  const _BitEditorDialog({required this.range, required this.bank});
+
+  final RegisterRange range;
+  final SparseHoldingRegisterBank bank;
+
+  @override
+  State<_BitEditorDialog> createState() => _BitEditorDialogState();
+}
+
+class _BitEditorDialogState extends State<_BitEditorDialog> {
+  static const Duration _syncInterval = Duration(milliseconds: 250);
+
+  late final List<int> _values;
+  final Set<int> _dirtyRows = <int>{};
+  Timer? _syncTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _values = _readCurrentValues();
+    _syncTimer = Timer.periodic(_syncInterval, (_) => _syncFromBank());
+  }
+
+  @override
+  void dispose() {
+    _syncTimer?.cancel();
+    super.dispose();
+  }
+
+  List<int> _readCurrentValues() {
+    return List<int>.from(
+      widget.bank.readRangeRaw(widget.range.start, widget.range.storageLength) ??
+          List<int>.filled(widget.range.storageLength, 0),
+    );
+  }
+
+  void _syncFromBank() {
+    final List<int> latestValues = _readCurrentValues();
+    bool hasChanges = false;
+
+    for (int i = 0; i < _values.length; i++) {
+      if (_dirtyRows.contains(i)) {
+        continue;
+      }
+      if (_values[i] != latestValues[i]) {
+        _values[i] = latestValues[i];
+        hasChanges = true;
+      }
+    }
+
+    if (hasChanges && mounted) {
+      setState(() {});
+    }
+  }
+
+  void _toggleBit(int row, int bit) {
+    setState(() {
+      _dirtyRows.add(row);
+      _values[row] = _values[row] ^ (1 << bit);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Bits: ${widget.range.name}'),
+      content: SizedBox(
+        width: 760,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: List<Widget>.generate(widget.range.storageLength, (int row) {
+              final int value = _values[row];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Address ${widget.range.start + row} | value=$value | 0x${value.toRadixString(16).toUpperCase().padLeft(4, '0')}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 4,
+                      runSpacing: 4,
+                      children: List<Widget>.generate(16, (int offset) {
+                        final int bit = 15 - offset;
+                        final bool enabled = ((_values[row] >> bit) & 0x1) == 1;
+                        return FilterChip(
+                          selected: enabled,
+                          label: Text('b$bit:${enabled ? 1 : 0}'),
+                          onSelected: (_) => _toggleBit(row, bit),
+                        );
+                      }),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Отмена'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(List<int>.from(_values)),
+          child: const Text('Применить'),
+        ),
+      ],
     );
   }
 }
