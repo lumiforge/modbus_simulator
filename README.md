@@ -38,6 +38,13 @@ Example YAML configuration for register mappings:
 examples/registers_config.example.yaml
 ```
 
+Top-level server settings in YAML:
+- `server_name`
+- `port`
+- `server_id` (or `slave_id`)
+- `byte_order` (`big_endian`, `byte_swap`, `word_swap`, `word_byte_swap`)
+- `address_offset` (`0` or `1`)
+
 ---
 
 ## Vision

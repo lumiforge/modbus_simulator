@@ -1,4 +1,10 @@
 version: 1
+server_name: 'Modbus Simulator'
+port: 1502
+server_id: 1
+byte_order: big_endian
+address_offset: 0
+
 inputs:
   - name: 'IO board input'
     address: 2187
@@ -23,7 +29,7 @@ inputs:
     access: read
     value_type: word
     length: 1
-    
+
   - name: 'World position'
     address: 2332
     access: read

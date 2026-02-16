@@ -17,6 +17,36 @@ enum StartupAction { loadConfig, createServer }
 
 enum RegisterAccess { read, write, readWrite }
 
+enum ByteOrderMode { bigEndian, byteSwap, wordSwap, wordByteSwap }
+
+extension ByteOrderModeX on ByteOrderMode {
+  String get yamlValue {
+    switch (this) {
+      case ByteOrderMode.bigEndian:
+        return 'big_endian';
+      case ByteOrderMode.byteSwap:
+        return 'byte_swap';
+      case ByteOrderMode.wordSwap:
+        return 'word_swap';
+      case ByteOrderMode.wordByteSwap:
+        return 'word_byte_swap';
+    }
+  }
+
+  String get title {
+    switch (this) {
+      case ByteOrderMode.bigEndian:
+        return 'Big Endian (ABCD)';
+      case ByteOrderMode.byteSwap:
+        return 'Byte swap (BADC)';
+      case ByteOrderMode.wordSwap:
+        return 'Word swap (CDAB)';
+      case ByteOrderMode.wordByteSwap:
+        return 'Word + Byte swap (DCBA)';
+    }
+  }
+}
+
 class ModbusSimulatorApp extends StatelessWidget {
   const ModbusSimulatorApp({super.key});
 
@@ -466,11 +496,19 @@ class ModbusLogEntry {
 }
 
 class ModbusTcpServer {
-  ModbusTcpServer({required this.bank, required this.onRegistersChanged, required this.onLog});
+  ModbusTcpServer({
+    required this.bank,
+    required this.onRegistersChanged,
+    required this.onLog,
+    required this.serverId,
+    required this.addressOffset,
+  });
 
   final SparseHoldingRegisterBank bank;
   final VoidCallback onRegistersChanged;
   final void Function(ModbusLogEntry entry) onLog;
+  final int serverId;
+  final int addressOffset;
 
   ServerSocket? _server;
   final List<Socket> _clients = <Socket>[];
@@ -558,6 +596,9 @@ class ModbusTcpServer {
     }
 
     final int unitId = data[6];
+    if (unitId != serverId) {
+      return;
+    }
     final Uint8List pdu = Uint8List.sublistView(data, 7, 6 + length);
     if (pdu.isEmpty) {
       return;
@@ -607,7 +648,8 @@ class ModbusTcpServer {
     }
 
     final ByteData body = ByteData.sublistView(pdu);
-    final int start = body.getUint16(1);
+    final int requestedStart = body.getUint16(1);
+    final int start = requestedStart - addressOffset;
     final int count = body.getUint16(3);
 
     final List<int>? values = bank.readRange(start, count);
@@ -642,7 +684,7 @@ class ModbusTcpServer {
     }
 
     final ByteData body = ByteData.sublistView(pdu);
-    final int address = body.getUint16(1);
+    final int address = body.getUint16(1) - addressOffset;
     final int value = body.getUint16(3);
 
     if (!bank.writeSingle(unitId, address, value, enforceAccess: true)) {
@@ -671,7 +713,8 @@ class ModbusTcpServer {
     }
 
     final ByteData body = ByteData.sublistView(pdu);
-    final int start = body.getUint16(1);
+    final int requestedStart = body.getUint16(1);
+    final int start = requestedStart - addressOffset;
     final int count = body.getUint16(3);
     final int byteCount = pdu[5];
 
@@ -695,7 +738,7 @@ class ModbusTcpServer {
       client,
       tid,
       unitId,
-      Uint8List.fromList(<int>[16, (start >> 8) & 0xFF, start & 0xFF, (count >> 8) & 0xFF, count & 0xFF]),
+      Uint8List.fromList(<int>[16, (requestedStart >> 8) & 0xFF, requestedStart & 0xFF, (count >> 8) & 0xFF, count & 0xFF]),
     );
     _log(clientId, 16, start, count, 'ok', mbapHeader, modbusRequest, requestApu);
     onRegistersChanged();
@@ -760,7 +803,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   static const Duration highlightWindow = Duration(seconds: 5);
 
   late final SparseHoldingRegisterBank _bank;
-  late final ModbusTcpServer _server;
+  ModbusTcpServer? _server;
   late final Timer _uiTimer;
   Timer? _requestLogUiTimer;
   final EventSink _sink = EventSink();
@@ -768,7 +811,9 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   final List<RegisterRange> _ranges = <RegisterRange>[];
   final Map<int, TextEditingController> _rangeValueControllers = <int, TextEditingController>{};
 
+  final TextEditingController _serverNameController = TextEditingController(text: 'Modbus Simulator');
   final TextEditingController _portController = TextEditingController(text: '$modbusPortDefault');
+  final TextEditingController _serverIdController = TextEditingController(text: '1');
 
   final List<ModbusLogEntry> _requestLog = <ModbusLogEntry>[];
   List<ModbusLogEntry> _requestLogView = <ModbusLogEntry>[];
@@ -776,6 +821,10 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   bool _requestLogPaused = false;
 
   int _port = modbusPortDefault;
+  int _serverId = 1;
+  int _addressOffset = 0;
+  ByteOrderMode _byteOrderMode = ByteOrderMode.bigEndian;
+  String _serverName = 'Modbus Simulator';
   String _status = 'Stopped';
 
   @override
@@ -784,8 +833,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     _bank = SparseHoldingRegisterBank((int unitId, int addr, List<int> values) {
       _sink.addWrite(unitId: unitId, addr: addr, values: values);
     });
-
-    _server = ModbusTcpServer(bank: _bank, onRegistersChanged: _refresh, onLog: _addReqLog);
 
     _uiTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
@@ -811,8 +858,10 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   void dispose() {
     _uiTimer.cancel();
     _requestLogUiTimer?.cancel();
-    _server.stop();
+    _server?.stop();
+    _serverNameController.dispose();
     _portController.dispose();
+    _serverIdController.dispose();
     for (final TextEditingController controller in _rangeValueControllers.values) {
       controller.dispose();
     }
@@ -879,7 +928,14 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
 
   Future<void> _startServer() async {
     try {
-      await _server.start(port: _port);
+      _server ??= ModbusTcpServer(
+        bank: _bank,
+        onRegistersChanged: _refresh,
+        onLog: _addReqLog,
+        serverId: _serverId,
+        addressOffset: _addressOffset,
+      );
+      await _server!.start(port: _port);
       if (!mounted) {
         return;
       }
@@ -898,12 +954,27 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     if (parsedPort == null || parsedPort < 1 || parsedPort > 65535) {
       return;
     }
+    final int? parsedServerId = int.tryParse(_serverIdController.text);
+    if (parsedServerId == null || parsedServerId < 0 || parsedServerId > 255) {
+      return;
+    }
+
     _port = parsedPort;
+    _serverId = parsedServerId;
+    _serverName = _serverNameController.text.trim().isEmpty ? 'Modbus Simulator' : _serverNameController.text.trim();
+    await _server?.stop();
+    _server = ModbusTcpServer(
+      bank: _bank,
+      onRegistersChanged: _refresh,
+      onLog: _addReqLog,
+      serverId: _serverId,
+      addressOffset: _addressOffset,
+    );
     await _startServer();
   }
 
   Future<void> _stopServer() async {
-    await _server.stop();
+    await _server?.stop();
     if (!mounted) {
       return;
     }
@@ -1108,6 +1179,45 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     }
   }
 
+
+  ByteOrderMode? _parseYamlByteOrder(String value) {
+    switch (value.trim()) {
+      case 'big_endian':
+        return ByteOrderMode.bigEndian;
+      case 'byte_swap':
+        return ByteOrderMode.byteSwap;
+      case 'word_swap':
+        return ByteOrderMode.wordSwap;
+      case 'word_byte_swap':
+        return ByteOrderMode.wordByteSwap;
+      default:
+        return null;
+    }
+  }
+
+  Map<String, String> _parseYamlConfigMeta(String content) {
+    final Map<String, String> meta = <String, String>{};
+    for (final String rawLine in LineSplitter.split(content)) {
+      final String line = rawLine.trim();
+      if (line.isEmpty || line.startsWith('#') || line.startsWith('- ') || line == 'inputs:' || line.startsWith('inputs:')) {
+        continue;
+      }
+      if (rawLine.startsWith(' ') || rawLine.startsWith('	')) {
+        continue;
+      }
+      final int split = line.indexOf(':');
+      if (split <= 0) {
+        continue;
+      }
+      final String key = line.substring(0, split).trim();
+      final String value = line.substring(split + 1).trim();
+      if (key.isNotEmpty) {
+        meta[key] = value;
+      }
+    }
+    return meta;
+  }
+
   RegisterValueType? _parseYamlValueType(String value) {
     switch (value.trim()) {
       case 'bit':
@@ -1191,10 +1301,26 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     try {
       final File input = File(rawPath);
       final String content = await input.readAsString();
+      final Map<String, String> meta = _parseYamlConfigMeta(content);
       final List<Map<String, String>> items = _parseInputItems(content);
       if (items.isEmpty) {
         setState(() {
           _status = 'Import error: inputs не найдены в YAML';
+        });
+        return;
+      }
+
+
+      final int configPort = int.tryParse((meta['port'] ?? '').trim()) ?? _port;
+      final int configServerId = int.tryParse((meta['server_id'] ?? meta['slave_id'] ?? '').trim()) ?? _serverId;
+      final int configAddressOffset = int.tryParse((meta['address_offset'] ?? '').trim()) ?? _addressOffset;
+      final ByteOrderMode configByteOrder = _parseYamlByteOrder(meta['byte_order'] ?? '') ?? _byteOrderMode;
+      final String configServerNameRaw = _parseYamlName(meta['server_name'] ?? '').trim();
+      final String configServerName = configServerNameRaw.isEmpty ? _serverName : configServerNameRaw;
+
+      if (configPort < 1 || configPort > 65535 || configServerId < 0 || configServerId > 255 || (configAddressOffset != 0 && configAddressOffset != 1)) {
+        setState(() {
+          _status = 'Ошибка импорта: неверные настройки сервера в YAML';
         });
         return;
       }
@@ -1270,6 +1396,14 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
         return;
       }
       setState(() {
+        _port = configPort;
+        _serverId = configServerId;
+        _addressOffset = configAddressOffset;
+        _byteOrderMode = configByteOrder;
+        _serverName = configServerName;
+        _portController.text = '$_port';
+        _serverIdController.text = '$_serverId';
+        _serverNameController.text = _serverName;
         _status = 'Импортировано ${_ranges.length} регистров из ${input.path}';
       });
     } on FileSystemException catch (e) {
@@ -1294,7 +1428,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     final List<WriteEvent> writes = _sink.getTail(limit: 50);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Borunte Robot Emulator (Strict Mode v3)')),
+      appBar: AppBar(title: Text(_serverName)),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -1306,6 +1440,13 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 SizedBox(
+                  width: 220,
+                  child: TextField(
+                    controller: _serverNameController,
+                    decoration: const InputDecoration(labelText: 'Server name'),
+                  ),
+                ),
+                SizedBox(
                   width: 120,
                   child: TextField(
                     controller: _portController,
@@ -1313,12 +1454,57 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                     keyboardType: TextInputType.number,
                   ),
                 ),
+                SizedBox(
+                  width: 120,
+                  child: TextField(
+                    controller: _serverIdController,
+                    decoration: const InputDecoration(labelText: 'Server ID (Slave ID)'),
+                    keyboardType: TextInputType.number,
+                  ),
+                ),
+                SizedBox(
+                  width: 250,
+                  child: DropdownButtonFormField<ByteOrderMode>(
+                    value: _byteOrderMode,
+                    decoration: const InputDecoration(labelText: 'Byte Order'),
+                    items: ByteOrderMode.values
+                        .map((ByteOrderMode mode) => DropdownMenuItem<ByteOrderMode>(value: mode, child: Text(mode.title)))
+                        .toList(),
+                    onChanged: (ByteOrderMode? mode) {
+                      if (mode == null) {
+                        return;
+                      }
+                      setState(() {
+                        _byteOrderMode = mode;
+                      });
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: 160,
+                  child: DropdownButtonFormField<int>(
+                    value: _addressOffset,
+                    decoration: const InputDecoration(labelText: 'Address Offset'),
+                    items: const <DropdownMenuItem<int>>[
+                      DropdownMenuItem<int>(value: 0, child: Text('0')),
+                      DropdownMenuItem<int>(value: 1, child: Text('1')),
+                    ],
+                    onChanged: (int? value) {
+                      if (value == null) {
+                        return;
+                      }
+                      setState(() {
+                        _addressOffset = value;
+                      });
+                    },
+                  ),
+                ),
                 FilledButton(onPressed: _restartServer, child: const Text('Start/Restart')),
                 OutlinedButton(onPressed: _stopServer, child: const Text('Stop')),
                 FilledButton.icon(
                   onPressed: _importConfigFromYaml,
                   icon: const Icon(Icons.download),
-                  label: const Text('Экспортировать'),
+                  label: const Text('Импорт YAML'),
                 ),
                 Text(_status),
               ],
