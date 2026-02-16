@@ -1,6 +1,6 @@
 version: 1
 server_name: 'Modbus Simulator'
-port: 1502
+port: 502
 server_id: 1
 byte_order: big_endian
 address_offset: 0

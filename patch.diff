@@ -1,0 +1,747 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/lib/main.dart b/lib/main.dart
+index c39f42bfc09b65d7546114ab4046fbf9f6a622e8..56141b730fad6f23fbdbdcd6de5e4729a8243d6e 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -787,51 +787,52 @@ class ModbusTcpServer {
+         requestApu: requestApu,
+       ),
+     );
+   }
+ }
+ 
+ class ModbusDashboard extends StatefulWidget {
+   const ModbusDashboard({required this.startupAction, super.key});
+ 
+   final StartupAction startupAction;
+ 
+   @override
+   State<ModbusDashboard> createState() => _ModbusDashboardState();
+ }
+ 
+ class _ModbusDashboardState extends State<ModbusDashboard> {
+   static const Duration highlightWindow = Duration(seconds: 5);
+ 
+   late final SparseHoldingRegisterBank _bank;
+   ModbusTcpServer? _server;
+   late final Timer _uiTimer;
+   Timer? _requestLogUiTimer;
+   final EventSink _sink = EventSink();
+ 
+   final List<RegisterRange> _ranges = <RegisterRange>[];
+-  final Map<int, TextEditingController> _rangeValueControllers = <int, TextEditingController>{};
++  final Map<int, List<TextEditingController>> _rangeValueControllers = <int, List<TextEditingController>>{};
++  final Map<int, List<FocusNode>> _rangeValueFocusNodes = <int, List<FocusNode>>{};
+ 
+   final TextEditingController _serverNameController = TextEditingController(text: 'Modbus Simulator');
+   final TextEditingController _portController = TextEditingController(text: '$modbusPortDefault');
+   final TextEditingController _serverIdController = TextEditingController(text: '1');
+ 
+   final List<ModbusLogEntry> _requestLog = <ModbusLogEntry>[];
+   List<ModbusLogEntry> _requestLogView = <ModbusLogEntry>[];
+   bool _logsVisible = false;
+   bool _requestLogPaused = false;
+ 
+   int _port = modbusPortDefault;
+   int _serverId = 1;
+   int _addressOffset = 0;
+   ByteOrderMode _byteOrderMode = ByteOrderMode.bigEndian;
+   String _serverName = 'Modbus Simulator';
+   String _status = 'Stopped';
+ 
+   @override
+   void initState() {
+     super.initState();
+     _bank = SparseHoldingRegisterBank((int unitId, int addr, List<int> values) {
+       _sink.addWrite(unitId: unitId, addr: addr, values: values);
+     });
+ 
+     _uiTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+@@ -840,114 +841,154 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
+       }
+     });
+ 
+     if (widget.startupAction == StartupAction.createServer) {
+       _startServer();
+     } else {
+       unawaited(_prepareDashboardWithConfig());
+     }
+   }
+ 
+   Future<void> _prepareDashboardWithConfig() async {
+     await _importConfigFromYaml();
+     if (_ranges.isNotEmpty) {
+       await _startServer();
+     }
+   }
+ 
+   @override
+   void dispose() {
+     _uiTimer.cancel();
+     _requestLogUiTimer?.cancel();
+     _server?.stop();
+     _serverNameController.dispose();
+     _portController.dispose();
+     _serverIdController.dispose();
+-    for (final TextEditingController controller in _rangeValueControllers.values) {
+-      controller.dispose();
++    for (final List<TextEditingController> controllers in _rangeValueControllers.values) {
++      for (final TextEditingController controller in controllers) {
++        controller.dispose();
++      }
++    }
++    for (final List<FocusNode> nodes in _rangeValueFocusNodes.values) {
++      for (final FocusNode node in nodes) {
++        node.dispose();
++      }
+     }
+     super.dispose();
+   }
+ 
+   void _addReqLog(ModbusLogEntry entry) {
+     _requestLog.insert(0, entry);
+     if (_requestLog.length > 200) {
+       _requestLog.removeLast();
+     }
+ 
+     if (!_requestLogPaused) {
+       _requestLogView = List<ModbusLogEntry>.from(_requestLog);
+     }
+ 
+     if (!mounted || !_logsVisible) {
+       return;
+     }
+ 
+     if (_requestLogUiTimer?.isActive ?? false) {
+       return;
+     }
+ 
+     _requestLogUiTimer = Timer(const Duration(milliseconds: 80), () {
+       if (mounted && _logsVisible && !_requestLogPaused) {
+         setState(() {});
+       }
+     });
+   }
+ 
+   void _toggleRequestLogPause() {
+     setState(() {
+       _requestLogPaused = !_requestLogPaused;
+       if (!_requestLogPaused) {
+         _requestLogView = List<ModbusLogEntry>.from(_requestLog);
+       }
+     });
+   }
+ 
+   void _refresh() {
+     _syncRangeValueControllers();
+     if (mounted) {
+       setState(() {});
+     }
+   }
+ 
+   void _syncRangeValueControllers() {
+     for (final RegisterRange range in _ranges) {
+-      final TextEditingController? controller = _rangeValueControllers[range.start];
+-      if (controller == null) {
++      final List<TextEditingController>? controllers = _rangeValueControllers[range.start];
++      final List<FocusNode>? focusNodes = _rangeValueFocusNodes[range.start];
++      if (controllers == null || focusNodes == null) {
+         continue;
+       }
+       final List<int>? values = _bank.readRangeRaw(range.start, range.storageLength);
+-      if (values == null) {
++      if (values == null || values.length != controllers.length) {
+         continue;
+       }
+-      final String text = values.length == 1 ? values.first.toString() : jsonEncode(values);
+-      if (controller.text != text) {
+-        controller.text = text;
++      for (int i = 0; i < controllers.length; i++) {
++        if (focusNodes[i].hasFocus) {
++          continue;
++        }
++        final String text = values[i].toString();
++        if (controllers[i].text != text) {
++          controllers[i].text = text;
++        }
+       }
+     }
+   }
+ 
++  void _ensureRangeInputControllers(RegisterRange range) {
++    final int len = range.storageLength;
++    final List<int> values = _bank.readRangeRaw(range.start, len) ?? List<int>.filled(len, 0);
++    final List<TextEditingController>? existing = _rangeValueControllers[range.start];
++    final List<FocusNode>? existingNodes = _rangeValueFocusNodes[range.start];
++    if (existing != null && existing.length == len && existingNodes != null && existingNodes.length == len) {
++      return;
++    }
++
++    if (existing != null) {
++      for (final TextEditingController controller in existing) {
++        controller.dispose();
++      }
++    }
++    if (existingNodes != null) {
++      for (final FocusNode node in existingNodes) {
++        node.dispose();
++      }
++    }
++
++    _rangeValueControllers[range.start] = List<TextEditingController>.generate(
++      len,
++      (int i) => TextEditingController(text: values[i].toString()),
++    );
++    _rangeValueFocusNodes[range.start] = List<FocusNode>.generate(len, (_) => FocusNode());
++  }
++
+   Future<void> _startServer() async {
+     try {
+       _server ??= ModbusTcpServer(
+         bank: _bank,
+         onRegistersChanged: _refresh,
+         onLog: _addReqLog,
+         serverId: _serverId,
+         addressOffset: _addressOffset,
+       );
+       await _server!.start(port: _port);
+       if (!mounted) {
+         return;
+       }
+       setState(() {
+         _status = 'Running on 0.0.0.0:$_port';
+       });
+     } on SocketException catch (e) {
+       setState(() {
+         _status = 'Start error: ${e.message}';
+       });
+     }
+   }
+ 
+   Future<void> _restartServer() async {
+     final int? parsedPort = int.tryParse(_portController.text);
+@@ -962,85 +1003,164 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
+     _port = parsedPort;
+     _serverId = parsedServerId;
+     _serverName = _serverNameController.text.trim().isEmpty ? 'Modbus Simulator' : _serverNameController.text.trim();
+     await _server?.stop();
+     _server = ModbusTcpServer(
+       bank: _bank,
+       onRegistersChanged: _refresh,
+       onLog: _addReqLog,
+       serverId: _serverId,
+       addressOffset: _addressOffset,
+     );
+     await _startServer();
+   }
+ 
+   Future<void> _stopServer() async {
+     await _server?.stop();
+     if (!mounted) {
+       return;
+     }
+     setState(() {
+       _status = 'Stopped';
+     });
+   }
+ 
+   void _writeRangeValue(RegisterRange range) {
+-    final TextEditingController? controller = _rangeValueControllers[range.start];
+-    if (controller == null) {
++    final List<TextEditingController>? controllers = _rangeValueControllers[range.start];
++    if (controllers == null || controllers.isEmpty) {
+       return;
+     }
+ 
+-    final String text = controller.text.trim();
+-    List<int> values;
+-    if (text.startsWith('[')) {
+-      final dynamic decoded = jsonDecode(text);
+-      if (decoded is! List) {
+-        return;
+-      }
+-      values = decoded.map((dynamic e) => (e as num).toInt()).toList();
+-    } else {
+-      final int? parsed = int.tryParse(text);
++    final List<int> values = <int>[];
++    for (final TextEditingController controller in controllers) {
++      final int? parsed = int.tryParse(controller.text.trim());
+       if (parsed == null) {
++        setState(() {
++          _status = 'Ошибка: введите числовые значения для ${range.name}';
++        });
+         return;
+       }
+-      values = <int>[parsed];
++      values.add(parsed);
++    }
++
++    final bool ok = _bank.writeMultiple(0, range.start, values);
++    if (ok) {
++      _refresh();
++    }
++  }
++
++  Future<void> _showBitEditor(RegisterRange range) async {
++    final int rowCount = range.storageLength;
++    final List<int> values = List<int>.from(_bank.readRangeRaw(range.start, rowCount) ?? List<int>.filled(rowCount, 0));
++
++    final bool? shouldApply = await showDialog<bool>(
++      context: context,
++      builder: (BuildContext context) {
++        return StatefulBuilder(
++          builder: (BuildContext context, StateSetter setDialogState) {
++            return AlertDialog(
++              title: Text('Bits: ${range.name}'),
++              content: SizedBox(
++                width: 760,
++                child: SingleChildScrollView(
++                  child: Column(
++                    crossAxisAlignment: CrossAxisAlignment.start,
++                    children: List<Widget>.generate(rowCount, (int row) {
++                      final int value = values[row];
++                      return Padding(
++                        padding: const EdgeInsets.only(bottom: 12),
++                        child: Column(
++                          crossAxisAlignment: CrossAxisAlignment.start,
++                          children: [
++                            Text(
++                              'Address ${range.start + row} | value=$value | 0x${value.toRadixString(16).toUpperCase().padLeft(4, '0')}',
++                              style: const TextStyle(fontWeight: FontWeight.w600),
++                            ),
++                            const SizedBox(height: 6),
++                            Wrap(
++                              spacing: 4,
++                              runSpacing: 4,
++                              children: List<Widget>.generate(16, (int offset) {
++                                final int bit = 15 - offset;
++                                final bool enabled = ((values[row] >> bit) & 0x1) == 1;
++                                return FilterChip(
++                                  selected: enabled,
++                                  label: Text('b$bit:${enabled ? 1 : 0}'),
++                                  onSelected: (_) {
++                                    setDialogState(() {
++                                      values[row] = values[row] ^ (1 << bit);
++                                    });
++                                  },
++                                );
++                              }),
++                            ),
++                          ],
++                        ),
++                      );
++                    }),
++                  ),
++                ),
++              ),
++              actions: [
++                TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Отмена')),
++                FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Применить')),
++              ],
++            );
++          },
++        );
++      },
++    );
++
++    if (shouldApply != true) {
++      return;
+     }
+ 
+     final bool ok = _bank.writeMultiple(0, range.start, values);
+     if (ok) {
+       _refresh();
+     }
+   }
+ 
+   void _removeRange(int index) {
+     if (index < 0 || index >= _ranges.length) {
+       return;
+     }
+     setState(() {
+       final RegisterRange range = _ranges.removeAt(index);
+       _bank.removeRange(range.start, range.storageLength);
+-      _rangeValueControllers.remove(range.start)?.dispose();
++      final List<TextEditingController>? controllers = _rangeValueControllers.remove(range.start);
++      if (controllers != null) {
++        for (final TextEditingController controller in controllers) {
++          controller.dispose();
++        }
++      }
++      final List<FocusNode>? nodes = _rangeValueFocusNodes.remove(range.start);
++      if (nodes != null) {
++        for (final FocusNode node in nodes) {
++          node.dispose();
++        }
++      }
+     });
+   }
+ 
+   Future<void> _showAddRegisterDialog() async {
+     final TextEditingController nameController = TextEditingController();
+     final TextEditingController startController = TextEditingController();
+     final TextEditingController lengthController = TextEditingController(text: '1');
+     final TextEditingController valueIndexController = TextEditingController(text: '0');
+ 
+     RegisterAccess access = RegisterAccess.readWrite;
+     RegisterValueType valueType = RegisterValueType.word;
+ 
+     final bool? shouldCreate = await showDialog<bool>(
+       context: context,
+       builder: (BuildContext context) {
+         return AlertDialog(
+           title: const Text('Добавить регистр'),
+           content: SizedBox(
+             width: 420,
+             child: SingleChildScrollView(
+               child: Column(
+                 mainAxisSize: MainAxisSize.min,
+                 children: <Widget>[
+                   TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Name')),
+                   TextField(
+@@ -1119,53 +1239,51 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
+     final int storageLength = valueType == RegisterValueType.word ? parsedLength : 1;
+ 
+     if (start == null || start < 0 || storageLength < 1) {
+       if (mounted) {
+         setState(() {
+           _status = 'Ошибка: проверьте параметры нового регистра';
+         });
+       }
+     } else {
+       final RegisterRange range = RegisterRange(
+         name: parsedName,
+         start: start,
+         access: access,
+         length: parsedLength,
+         valueType: valueType,
+         valueIndex: parsedValueIndex,
+       );
+       final bool added = _bank.addRange(range.start, range.storageLength, range.access);
+       if (!added) {
+         setState(() {
+           _status = 'Ошибка: диапазон адресов уже занят';
+         });
+       } else {
+         setState(() {
+           _ranges.add(range);
+-          _rangeValueControllers[range.start] = TextEditingController(
+-            text: range.storageLength > 1 ? jsonEncode(List<int>.filled(range.storageLength, 0)) : '0',
+-          );
++          _ensureRangeInputControllers(range);
+           _status = 'Добавлен регистр ${range.name} (${range.start})';
+         });
+       }
+     }
+ 
+     nameController.dispose();
+     startController.dispose();
+     lengthController.dispose();
+     valueIndexController.dispose();
+   }
+ 
+   Future<String?> _selectYamlConfigPath() async {
+     final XFile? file = await openFile(
+       acceptedTypeGroups: <XTypeGroup>[
+         const XTypeGroup(label: 'YAML', extensions: <String>['yaml', 'yml']),
+       ],
+       confirmButtonText: 'Выбрать',
+     );
+ 
+     return file?.path;
+   }
+ 
+   Future<String?> _selectYamlExportPath() async {
+     final FileSaveLocation? saveLocation = await getSaveLocation(
+       acceptedTypeGroups: <XTypeGroup>[
+@@ -1430,78 +1548,82 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
+           setState(() {
+             _status = 'Ошибка импорта: некорректная запись в YAML';
+           });
+           return;
+         }
+ 
+         final int safeLength = type == RegisterValueType.word ? length : 1;
+         final RegisterRange range = RegisterRange(
+           name: name,
+           start: address,
+           access: access,
+           length: safeLength,
+           valueType: type,
+           valueIndex: index,
+         );
+         importedRanges.add(range);
+ 
+         if (item.containsKey('values')) {
+           importedValues[address] = _parseYamlValues(item['values']!);
+         }
+       }
+ 
+       for (final RegisterRange range in _ranges) {
+         _bank.removeRange(range.start, range.storageLength);
+       }
+-      for (final TextEditingController controller in _rangeValueControllers.values) {
+-        controller.dispose();
++      for (final List<TextEditingController> controllers in _rangeValueControllers.values) {
++        for (final TextEditingController controller in controllers) {
++          controller.dispose();
++        }
++      }
++      for (final List<FocusNode> nodes in _rangeValueFocusNodes.values) {
++        for (final FocusNode node in nodes) {
++          node.dispose();
++        }
+       }
+       _rangeValueControllers.clear();
++      _rangeValueFocusNodes.clear();
+       _ranges.clear();
+ 
+       for (final RegisterRange range in importedRanges) {
+         final bool added = _bank.addRange(range.start, range.storageLength, range.access);
+         if (!added) {
+           setState(() {
+             _status = 'Ошибка импорта: пересечение адресов в YAML';
+           });
+           return;
+         }
+         final List<int> initial = importedValues[range.start] ?? <int>[];
+         if (initial.isNotEmpty) {
+           final List<int> valuesToWrite = initial.take(range.storageLength).toList();
+           if (valuesToWrite.length < range.storageLength) {
+             valuesToWrite.addAll(List<int>.filled(range.storageLength - valuesToWrite.length, 0));
+           }
+           _bank.writeMultiple(0, range.start, valuesToWrite);
+         }
+         _ranges.add(range);
+-        _rangeValueControllers[range.start] = TextEditingController(
+-          text: range.storageLength > 1
+-              ? jsonEncode(_bank.readRangeRaw(range.start, range.storageLength) ?? List<int>.filled(range.storageLength, 0))
+-              : (_bank.readRangeRaw(range.start, 1)?.first ?? 0).toString(),
+-        );
++        _ensureRangeInputControllers(range);
+       }
+ 
+       if (!mounted) {
+         return;
+       }
+       setState(() {
+         _port = configPort;
+         _serverId = configServerId;
+         _addressOffset = configAddressOffset;
+         _byteOrderMode = configByteOrder;
+         _serverName = configServerName;
+         _portController.text = '$_port';
+         _serverIdController.text = '$_serverId';
+         _serverNameController.text = _serverName;
+         _status = 'Импортировано ${_ranges.length} регистров из ${input.path}';
+       });
+     } on FileSystemException catch (e) {
+       if (!mounted) {
+         return;
+       }
+       setState(() {
+         _status = 'Ошибка импорта: ${e.message}';
+       });
+     } on FormatException {
+       if (!mounted) {
+@@ -1683,131 +1805,165 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
+               children: [
+                 const Expanded(child: Text('Registers', style: TextStyle(fontWeight: FontWeight.bold))),
+                 IconButton(
+                   tooltip: 'Добавить регистр',
+                   onPressed: _showAddRegisterDialog,
+                   icon: const Icon(Icons.add),
+                 ),
+               ],
+             ),
+             const SizedBox(height: 8),
+             Expanded(
+               child: LayoutBuilder(
+                 builder: (BuildContext context, BoxConstraints constraints) {
+                   final int columns = (constraints.maxWidth / 360).floor().clamp(1, 6);
+                   return GridView.builder(
+                     itemCount: _ranges.length,
+                     gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                       crossAxisCount: columns,
+                       crossAxisSpacing: 8,
+                       mainAxisSpacing: 8,
+                       childAspectRatio: 2.3,
+                     ),
+                     itemBuilder: (BuildContext context, int index) {
+                       final RegisterRange range = _ranges[index];
+                       final bool changed = range.isChanged(_bank, highlightWindow);
+-                      final TextEditingController? valueController = _rangeValueControllers[range.start];
++                      _ensureRangeInputControllers(range);
++                      final List<TextEditingController> valueControllers =
++                          _rangeValueControllers[range.start] ?? <TextEditingController>[];
++                      final List<FocusNode> focusNodes = _rangeValueFocusNodes[range.start] ?? <FocusNode>[];
++                      final List<int> currentValues =
++                          _bank.readRangeRaw(range.start, range.storageLength) ?? List<int>.filled(range.storageLength, 0);
+                       return Container(
+                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                         decoration: BoxDecoration(
+                           border: Border.all(color: Colors.white24),
+                           color: changed ? Colors.yellow.withValues(alpha: 0.18) : null,
+                         ),
+                         child: Column(
+                           crossAxisAlignment: CrossAxisAlignment.start,
+                           children: [
+                             Row(
+                               children: [
+                                 Expanded(
+                                   child: Text(
+                                     '${range.name} | ${range.start} | ${range.typeLabel} | ${range.accessLabel}',
+                                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                     maxLines: 2,
+                                     overflow: TextOverflow.ellipsis,
+                                   ),
+                                 ),
++                                IconButton(
++                                  visualDensity: VisualDensity.compact,
++                                  tooltip: 'Побитный редактор',
++                                  onPressed: () => _showBitEditor(range),
++                                  icon: const Icon(Icons.tune, size: 18),
++                                ),
+                                 IconButton(
+                                   visualDensity: VisualDensity.compact,
+                                   onPressed: () => _removeRange(index),
+                                   icon: const Icon(Icons.delete_outline, size: 18),
+                                 ),
+                               ],
+                             ),
+-                            Text('Current: ${range.displayValue(_bank)}', style: const TextStyle(fontSize: 12), maxLines: 2),
+-                            if (valueController != null) ...<Widget>[
+-                              const SizedBox(height: 2),
+-                              TextField(
+-                                controller: valueController,
+-                                enabled: true,
+-                                decoration: const InputDecoration(
+-                                  isDense: true,
+-                                  labelText: 'New value (number or [..])',
+-                                ),
++                            Expanded(
++                              child: ListView.builder(
++                                itemCount: valueControllers.length,
++                                itemBuilder: (BuildContext context, int row) {
++                                  final int addr = range.start + row;
++                                  final int value = row < currentValues.length ? currentValues[row] : 0;
++                                  return Padding(
++                                    padding: const EdgeInsets.only(bottom: 4),
++                                    child: Row(
++                                      children: [
++                                        SizedBox(
++                                          width: 84,
++                                          child: Text(
++                                            '[$addr] $value',
++                                            style: const TextStyle(fontSize: 11),
++                                            overflow: TextOverflow.ellipsis,
++                                          ),
++                                        ),
++                                        const SizedBox(width: 6),
++                                        Expanded(
++                                          child: TextField(
++                                            controller: valueControllers[row],
++                                            focusNode: row < focusNodes.length ? focusNodes[row] : null,
++                                            keyboardType: TextInputType.number,
++                                            decoration: const InputDecoration(
++                                              isDense: true,
++                                              hintText: 'Новое значение',
++                                            ),
++                                          ),
++                                        ),
++                                      ],
++                                    ),
++                                  );
++                                },
+                               ),
+-                              const SizedBox(height: 2),
+-                              SizedBox(
+-                                height: 32,
+-                                child: FilledButton(
+-                                  onPressed: () => _writeRangeValue(range),
+-                                  child: const Text('Write value'),
+-                                ),
++                            ),
++                            SizedBox(
++                              height: 32,
++                              width: double.infinity,
++                              child: FilledButton(
++                                onPressed: () => _writeRangeValue(range),
++                                child: const Text('Записать'),
+                               ),
+-                            ],
++                            ),
+                           ],
+                         ),
+                       );
+                     },
+                   );
+                 },
+               ),
+             ),
+           ],
+         ),
+       ),
+     );
+   }
+ 
+   Widget _buildRequestPanel() {
+     return Card(
+       child: Padding(
+         padding: const EdgeInsets.all(8),
+         child: Column(
+           crossAxisAlignment: CrossAxisAlignment.start,
+           children: [
+             const Text('Request Logs (MBAP + Modbus Request APU)', style: TextStyle(fontWeight: FontWeight.bold)),
+             const SizedBox(height: 6),
+             Align(
+               alignment: Alignment.centerLeft,
+               child: TextButton.icon(
+                 onPressed: _toggleRequestLogPause,
+                 icon: Icon(_requestLogPaused ? Icons.play_arrow : Icons.pause),
+                 label: Text(_requestLogPaused ? 'Resume' : 'Pause'),
+               ),
+             ),
++            const SizedBox(height: 6),
+             Expanded(
+               child: ListView.builder(
+                 itemCount: _requestLogView.length,
+                 itemBuilder: (BuildContext context, int index) {
+                   final ModbusLogEntry e = _requestLogView[index];
+                   final String t =
+-                      '${e.timestamp.hour.toString().padLeft(2, '0')}:${e.timestamp.minute.toString().padLeft(2, '0')}:${e.timestamp.second.toString().padLeft(2, '0')}';
+-                  return ListTile(
+-                    dense: true,
+-                    contentPadding: EdgeInsets.zero,
+-                    title: Text('$t ${e.client} FC${e.functionCode} ${e.result}'),
+-                    subtitle: Text(
+-                      'addr=${e.startAddress} len=${e.length}\n'
+-                      'MBAP: ${e.mbapHeader}\n'
+-                      'Modbus request: ${e.modbusRequest}\n'
+-                      'Request APU: ${e.requestApu}',
+-                      style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+-                    ),
++                      '${e.timestamp.hour.toString().padLeft(2, '0')}:${e.timestamp.minute.toString().padLeft(2, '0')}:${e.timestamp.second.toString().padLeft(2, '0')}.${e.timestamp.millisecond.toString().padLeft(3, '0')}';
++                  return Text(
++                    '#${e.id} $t '
++                    'fc=0x${e.functionCode.toRadixString(16).toUpperCase().padLeft(2, '0')} '
++                    'addr=${e.startAddress} len=${e.length}\n'
++                    'MBAP: ${e.mbapHeader}\n'
++                    'ModbusReq: ${e.modbusRequest}\n'
++                    'APU(bytes): ${e.requestApu}\n'
++                    'Result: ${e.result}',
++                    style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                   );
+                 },
+               ),
+             ),
+           ],
+         ),
+       ),
+     );
+-  }
++}
+ }
+ 
+EOF
+)

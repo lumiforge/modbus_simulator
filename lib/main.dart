@@ -55,7 +55,10 @@ class ModbusSimulatorApp extends StatelessWidget {
     return MaterialApp(
       title: 'Borunte Emulator',
       theme: ThemeData.dark().copyWith(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue, brightness: Brightness.dark),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          brightness: Brightness.dark,
+        ),
       ),
       home: const StartupScreen(),
     );
@@ -102,7 +105,8 @@ class _StartupScreenState extends State<StartupScreen> {
           _activeHosts.add(host);
           if (mounted) {
             setState(() {
-              _scanStatus = 'Найдено активных устройств: ${_activeHosts.length}';
+              _scanStatus =
+                  'Найдено активных устройств: ${_activeHosts.length}';
             });
           }
         }
@@ -158,7 +162,10 @@ class _StartupScreenState extends State<StartupScreen> {
 
         final int first = int.tryParse(octets[0]) ?? -1;
         final int second = int.tryParse(octets[1]) ?? -1;
-        final bool isPrivate = first == 10 || (first == 172 && second >= 16 && second <= 31) || (first == 192 && second == 168);
+        final bool isPrivate =
+            first == 10 ||
+            (first == 172 && second >= 16 && second <= 31) ||
+            (first == 192 && second == 168);
         if (isPrivate) {
           return '${octets[0]}.${octets[1]}.${octets[2]}';
         }
@@ -183,7 +190,8 @@ class _StartupScreenState extends State<StartupScreen> {
   void _openDashboard(StartupAction action) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (BuildContext context) => ModbusDashboard(startupAction: action),
+        builder: (BuildContext context) =>
+            ModbusDashboard(startupAction: action),
       ),
     );
   }
@@ -234,7 +242,10 @@ class _StartupScreenState extends State<StartupScreen> {
             if (_scanInProgress) const LinearProgressIndicator(),
             if (_activeHosts.isNotEmpty) ...<Widget>[
               const SizedBox(height: 12),
-              const Text('Активные устройства:', style: TextStyle(fontWeight: FontWeight.bold)),
+              const Text(
+                'Активные устройства:',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
               const SizedBox(height: 8),
               Expanded(
                 child: ListView.builder(
@@ -271,7 +282,8 @@ class RegisterRange {
   final RegisterValueType valueType;
   final int valueIndex;
 
-  String get label => '$name (0x${start.toRadixString(16).toUpperCase().padLeft(4, '0')})';
+  String get label =>
+      '$name (0x${start.toRadixString(16).toUpperCase().padLeft(4, '0')})';
 
   int get storageLength => valueType == RegisterValueType.word ? length : 1;
 
@@ -308,7 +320,9 @@ class RegisterRange {
         return values.toString();
       case RegisterValueType.byte:
         final int rawWord = values.first;
-        final int byteValue = valueIndex == 0 ? rawWord & 0xFF : (rawWord >> 8) & 0xFF;
+        final int byteValue = valueIndex == 0
+            ? rawWord & 0xFF
+            : (rawWord >> 8) & 0xFF;
         return '$byteValue (0x${byteValue.toRadixString(16).toUpperCase().padLeft(2, '0')})';
       case RegisterValueType.bit:
         final int rawWord = values.first;
@@ -357,9 +371,21 @@ class EventSink {
     return data;
   }
 
-  void addWrite({required int unitId, required int addr, required List<int> values}) {
+  void addWrite({
+    required int unitId,
+    required int addr,
+    required List<int> values,
+  }) {
     _seq += 1;
-    _tail.add(WriteEvent(seq: _seq, ts: DateTime.now(), unitId: unitId, addr: addr, values: values));
+    _tail.add(
+      WriteEvent(
+        seq: _seq,
+        ts: DateTime.now(),
+        unitId: unitId,
+        addr: addr,
+        values: values,
+      ),
+    );
     if (_tail.length > uiTailKeep) {
       _tail.removeRange(0, _tail.length - uiTailKeep);
     }
@@ -401,7 +427,12 @@ class SparseHoldingRegisterBank {
     }
   }
 
-  bool _validate(int start, int count, {required bool forWrite, bool enforceWriteAccess = true}) {
+  bool _validate(
+    int start,
+    int count, {
+    required bool forWrite,
+    bool enforceWriteAccess = true,
+  }) {
     if (count <= 0 || start < 0) {
       return false;
     }
@@ -440,8 +471,18 @@ class SparseHoldingRegisterBank {
     return List<int>.generate(count, (int i) => _values[start + i] ?? 0);
   }
 
-  bool writeSingle(int unitId, int address, int value, {bool enforceAccess = false}) {
-    if (!_validate(address, 1, forWrite: true, enforceWriteAccess: enforceAccess)) {
+  bool writeSingle(
+    int unitId,
+    int address,
+    int value, {
+    bool enforceAccess = false,
+  }) {
+    if (!_validate(
+      address,
+      1,
+      forWrite: true,
+      enforceWriteAccess: enforceAccess,
+    )) {
       return false;
     }
     _values[address] = value & 0xFFFF;
@@ -450,8 +491,18 @@ class SparseHoldingRegisterBank {
     return true;
   }
 
-  bool writeMultiple(int unitId, int start, List<int> values, {bool enforceAccess = false}) {
-    if (!_validate(start, values.length, forWrite: true, enforceWriteAccess: enforceAccess)) {
+  bool writeMultiple(
+    int unitId,
+    int start,
+    List<int> values, {
+    bool enforceAccess = false,
+  }) {
+    if (!_validate(
+      start,
+      values.length,
+      forWrite: true,
+      enforceWriteAccess: enforceAccess,
+    )) {
       return false;
     }
     for (int i = 0; i < values.length; i++) {
@@ -516,7 +567,11 @@ class ModbusTcpServer {
 
   Future<void> start({required int port, InternetAddress? address}) async {
     await stop();
-    _server = await ServerSocket.bind(address ?? InternetAddress.anyIPv4, port, shared: true);
+    _server = await ServerSocket.bind(
+      address ?? InternetAddress.anyIPv4,
+      port,
+      shared: true,
+    );
     _server!.listen((Socket client) {
       _clients.add(client);
       _buffers[client] = BytesBuilder(copy: false);
@@ -605,7 +660,8 @@ class ModbusTcpServer {
     }
 
     final int functionCode = pdu[0];
-    final String clientId = '${client.remoteAddress.address}:${client.remotePort}';
+    final String clientId =
+        '${client.remoteAddress.address}:${client.remotePort}';
     final ByteData header = ByteData.sublistView(data, 0, 6);
     final String mbapHeader =
         'TID=0x${header.getUint16(0).toRadixString(16).toUpperCase().padLeft(4, '0')} '
@@ -619,17 +675,53 @@ class ModbusTcpServer {
 
     switch (functionCode) {
       case 3:
-        _handleReadHoldingRegisters(client, transactionId, unitId, pdu, clientId, mbapHeader, modbusRequest, requestApu);
+        _handleReadHoldingRegisters(
+          client,
+          transactionId,
+          unitId,
+          pdu,
+          clientId,
+          mbapHeader,
+          modbusRequest,
+          requestApu,
+        );
         break;
       case 6:
-        _handleWriteSingleRegister(client, transactionId, unitId, pdu, clientId, mbapHeader, modbusRequest, requestApu);
+        _handleWriteSingleRegister(
+          client,
+          transactionId,
+          unitId,
+          pdu,
+          clientId,
+          mbapHeader,
+          modbusRequest,
+          requestApu,
+        );
         break;
       case 16:
-        _handleWriteMultipleRegisters(client, transactionId, unitId, pdu, clientId, mbapHeader, modbusRequest, requestApu);
+        _handleWriteMultipleRegisters(
+          client,
+          transactionId,
+          unitId,
+          pdu,
+          clientId,
+          mbapHeader,
+          modbusRequest,
+          requestApu,
+        );
         break;
       default:
         _sendException(client, transactionId, unitId, functionCode, 0x01);
-        _log(clientId, functionCode, 0, 0, 'exception', mbapHeader, modbusRequest, requestApu);
+        _log(
+          clientId,
+          functionCode,
+          0,
+          0,
+          'exception',
+          mbapHeader,
+          modbusRequest,
+          requestApu,
+        );
     }
   }
 
@@ -655,18 +747,38 @@ class ModbusTcpServer {
     final List<int>? values = bank.readRange(start, count);
     if (values == null) {
       _sendException(client, tid, unitId, 3, 0x02);
-      _log(clientId, 3, start, count, 'exception', mbapHeader, modbusRequest, requestApu);
+      _log(
+        clientId,
+        3,
+        start,
+        count,
+        'exception',
+        mbapHeader,
+        modbusRequest,
+        requestApu,
+      );
       return;
     }
 
     final BytesBuilder responsePdu = BytesBuilder();
-    responsePdu..addByte(3)..addByte(count * 2);
+    responsePdu
+      ..addByte(3)
+      ..addByte(count * 2);
     for (final int value in values) {
       responsePdu.add(<int>[(value >> 8) & 0xFF, value & 0xFF]);
     }
 
     _sendResponse(client, tid, unitId, responsePdu.toBytes());
-    _log(clientId, 3, start, count, 'ok', mbapHeader, modbusRequest, requestApu);
+    _log(
+      clientId,
+      3,
+      start,
+      count,
+      'ok',
+      mbapHeader,
+      modbusRequest,
+      requestApu,
+    );
   }
 
   void _handleWriteSingleRegister(
@@ -689,7 +801,16 @@ class ModbusTcpServer {
 
     if (!bank.writeSingle(unitId, address, value, enforceAccess: true)) {
       _sendException(client, tid, unitId, 6, 0x02);
-      _log(clientId, 6, address, 1, 'exception', mbapHeader, modbusRequest, requestApu);
+      _log(
+        clientId,
+        6,
+        address,
+        1,
+        'exception',
+        mbapHeader,
+        modbusRequest,
+        requestApu,
+      );
       return;
     }
 
@@ -730,7 +851,16 @@ class ModbusTcpServer {
 
     if (!bank.writeMultiple(unitId, start, values, enforceAccess: true)) {
       _sendException(client, tid, unitId, 16, 0x02);
-      _log(clientId, 16, start, count, 'exception', mbapHeader, modbusRequest, requestApu);
+      _log(
+        clientId,
+        16,
+        start,
+        count,
+        'exception',
+        mbapHeader,
+        modbusRequest,
+        requestApu,
+      );
       return;
     }
 
@@ -738,14 +868,40 @@ class ModbusTcpServer {
       client,
       tid,
       unitId,
-      Uint8List.fromList(<int>[16, (requestedStart >> 8) & 0xFF, requestedStart & 0xFF, (count >> 8) & 0xFF, count & 0xFF]),
+      Uint8List.fromList(<int>[
+        16,
+        (requestedStart >> 8) & 0xFF,
+        requestedStart & 0xFF,
+        (count >> 8) & 0xFF,
+        count & 0xFF,
+      ]),
     );
-    _log(clientId, 16, start, count, 'ok', mbapHeader, modbusRequest, requestApu);
+    _log(
+      clientId,
+      16,
+      start,
+      count,
+      'ok',
+      mbapHeader,
+      modbusRequest,
+      requestApu,
+    );
     onRegistersChanged();
   }
 
-  void _sendException(Socket client, int tid, int unitId, int function, int exceptionCode) {
-    _sendResponse(client, tid, unitId, Uint8List.fromList(<int>[function | 0x80, exceptionCode]));
+  void _sendException(
+    Socket client,
+    int tid,
+    int unitId,
+    int function,
+    int exceptionCode,
+  ) {
+    _sendResponse(
+      client,
+      tid,
+      unitId,
+      Uint8List.fromList(<int>[function | 0x80, exceptionCode]),
+    );
   }
 
   void _sendResponse(Socket client, int tid, int unitId, Uint8List pdu) {
@@ -761,7 +917,9 @@ class ModbusTcpServer {
   }
 
   String _formatBytesHex(Uint8List bytes) {
-    return bytes.map((int b) => b.toRadixString(16).toUpperCase().padLeft(2, '0')).join(' ');
+    return bytes
+        .map((int b) => b.toRadixString(16).toUpperCase().padLeft(2, '0'))
+        .join(' ');
   }
 
   void _log(
@@ -809,11 +967,20 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   final EventSink _sink = EventSink();
 
   final List<RegisterRange> _ranges = <RegisterRange>[];
-  final Map<int, TextEditingController> _rangeValueControllers = <int, TextEditingController>{};
+  final Map<int, List<TextEditingController>> _rangeValueControllers =
+      <int, List<TextEditingController>>{};
+  final Map<int, List<FocusNode>> _rangeValueFocusNodes =
+      <int, List<FocusNode>>{};
 
-  final TextEditingController _serverNameController = TextEditingController(text: 'Modbus Simulator');
-  final TextEditingController _portController = TextEditingController(text: '$modbusPortDefault');
-  final TextEditingController _serverIdController = TextEditingController(text: '1');
+  final TextEditingController _serverNameController = TextEditingController(
+    text: 'Modbus Simulator',
+  );
+  final TextEditingController _portController = TextEditingController(
+    text: '$modbusPortDefault',
+  );
+  final TextEditingController _serverIdController = TextEditingController(
+    text: '1',
+  );
 
   final List<ModbusLogEntry> _requestLog = <ModbusLogEntry>[];
   List<ModbusLogEntry> _requestLogView = <ModbusLogEntry>[];
@@ -862,8 +1029,16 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     _serverNameController.dispose();
     _portController.dispose();
     _serverIdController.dispose();
-    for (final TextEditingController controller in _rangeValueControllers.values) {
-      controller.dispose();
+    for (final List<TextEditingController> controllers
+        in _rangeValueControllers.values) {
+      for (final TextEditingController controller in controllers) {
+        controller.dispose();
+      }
+    }
+    for (final List<FocusNode> nodes in _rangeValueFocusNodes.values) {
+      for (final FocusNode node in nodes) {
+        node.dispose();
+      }
     }
     super.dispose();
   }
@@ -911,19 +1086,64 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
 
   void _syncRangeValueControllers() {
     for (final RegisterRange range in _ranges) {
-      final TextEditingController? controller = _rangeValueControllers[range.start];
-      if (controller == null) {
+      final List<TextEditingController>? controllers =
+          _rangeValueControllers[range.start];
+      final List<FocusNode>? focusNodes = _rangeValueFocusNodes[range.start];
+      if (controllers == null || focusNodes == null) {
         continue;
       }
-      final List<int>? values = _bank.readRangeRaw(range.start, range.storageLength);
-      if (values == null) {
+      final List<int>? values = _bank.readRangeRaw(
+        range.start,
+        range.storageLength,
+      );
+      if (values == null || values.length != controllers.length) {
         continue;
       }
-      final String text = values.length == 1 ? values.first.toString() : jsonEncode(values);
-      if (controller.text != text) {
-        controller.text = text;
+      for (int i = 0; i < controllers.length; i++) {
+        if (focusNodes[i].hasFocus) {
+          continue;
+        }
+        final String text = values[i].toString();
+        if (controllers[i].text != text) {
+          controllers[i].text = text;
+        }
       }
     }
+  }
+
+  void _ensureRangeInputControllers(RegisterRange range) {
+    final int len = range.storageLength;
+    final List<int> values =
+        _bank.readRangeRaw(range.start, len) ?? List<int>.filled(len, 0);
+    final List<TextEditingController>? existing =
+        _rangeValueControllers[range.start];
+    final List<FocusNode>? existingNodes = _rangeValueFocusNodes[range.start];
+    if (existing != null &&
+        existing.length == len &&
+        existingNodes != null &&
+        existingNodes.length == len) {
+      return;
+    }
+
+    if (existing != null) {
+      for (final TextEditingController controller in existing) {
+        controller.dispose();
+      }
+    }
+    if (existingNodes != null) {
+      for (final FocusNode node in existingNodes) {
+        node.dispose();
+      }
+    }
+
+    _rangeValueControllers[range.start] = List<TextEditingController>.generate(
+      len,
+      (int i) => TextEditingController(text: values[i].toString()),
+    );
+    _rangeValueFocusNodes[range.start] = List<FocusNode>.generate(
+      len,
+      (_) => FocusNode(),
+    );
   }
 
   Future<void> _startServer() async {
@@ -961,7 +1181,9 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
 
     _port = parsedPort;
     _serverId = parsedServerId;
-    _serverName = _serverNameController.text.trim().isEmpty ? 'Modbus Simulator' : _serverNameController.text.trim();
+    _serverName = _serverNameController.text.trim().isEmpty
+        ? 'Modbus Simulator'
+        : _serverNameController.text.trim();
     await _server?.stop();
     _server = ModbusTcpServer(
       bank: _bank,
@@ -984,25 +1206,106 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
   }
 
   void _writeRangeValue(RegisterRange range) {
-    final TextEditingController? controller = _rangeValueControllers[range.start];
-    if (controller == null) {
+    final List<TextEditingController>? controllers =
+        _rangeValueControllers[range.start];
+    if (controllers == null || controllers.isEmpty) {
       return;
     }
 
-    final String text = controller.text.trim();
-    List<int> values;
-    if (text.startsWith('[')) {
-      final dynamic decoded = jsonDecode(text);
-      if (decoded is! List) {
-        return;
-      }
-      values = decoded.map((dynamic e) => (e as num).toInt()).toList();
-    } else {
-      final int? parsed = int.tryParse(text);
+    final List<int> values = <int>[];
+    for (final TextEditingController controller in controllers) {
+      final int? parsed = int.tryParse(controller.text.trim());
       if (parsed == null) {
+        setState(() {
+          _status = 'Ошибка: введите числовые значения для ${range.name}';
+        });
         return;
       }
-      values = <int>[parsed];
+      values.add(parsed);
+    }
+
+    final bool ok = _bank.writeMultiple(0, range.start, values);
+    if (ok) {
+      _refresh();
+    }
+  }
+
+  Future<void> _showBitEditor(RegisterRange range) async {
+    final int rowCount = range.storageLength;
+    final List<int> values = List<int>.from(
+      _bank.readRangeRaw(range.start, rowCount) ??
+          List<int>.filled(rowCount, 0),
+    );
+
+    final bool? shouldApply = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setDialogState) {
+            return AlertDialog(
+              title: Text('Bits: ${range.name}'),
+              content: SizedBox(
+                width: 760,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: List<Widget>.generate(rowCount, (int row) {
+                      final int value = values[row];
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Address ${range.start + row} | value=$value | 0x${value.toRadixString(16).toUpperCase().padLeft(4, '0')}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Wrap(
+                              spacing: 4,
+                              runSpacing: 4,
+                              children: List<Widget>.generate(16, (int offset) {
+                                final int bit = 15 - offset;
+                                final bool enabled =
+                                    ((values[row] >> bit) & 0x1) == 1;
+                                return FilterChip(
+                                  selected: enabled,
+                                  label: Text('b$bit:${enabled ? 1 : 0}'),
+                                  onSelected: (_) {
+                                    setDialogState(() {
+                                      values[row] = values[row] ^ (1 << bit);
+                                    });
+                                  },
+                                );
+                              }),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Отмена'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('Применить'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (shouldApply != true) {
+      return;
     }
 
     final bool ok = _bank.writeMultiple(0, range.start, values);
@@ -1018,15 +1321,31 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     setState(() {
       final RegisterRange range = _ranges.removeAt(index);
       _bank.removeRange(range.start, range.storageLength);
-      _rangeValueControllers.remove(range.start)?.dispose();
+      final List<TextEditingController>? controllers = _rangeValueControllers
+          .remove(range.start);
+      if (controllers != null) {
+        for (final TextEditingController controller in controllers) {
+          controller.dispose();
+        }
+      }
+      final List<FocusNode>? nodes = _rangeValueFocusNodes.remove(range.start);
+      if (nodes != null) {
+        for (final FocusNode node in nodes) {
+          node.dispose();
+        }
+      }
     });
   }
 
   Future<void> _showAddRegisterDialog() async {
     final TextEditingController nameController = TextEditingController();
     final TextEditingController startController = TextEditingController();
-    final TextEditingController lengthController = TextEditingController(text: '1');
-    final TextEditingController valueIndexController = TextEditingController(text: '0');
+    final TextEditingController lengthController = TextEditingController(
+      text: '1',
+    );
+    final TextEditingController valueIndexController = TextEditingController(
+      text: '0',
+    );
 
     RegisterAccess access = RegisterAccess.readWrite;
     RegisterValueType valueType = RegisterValueType.word;
@@ -1042,10 +1361,15 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Name')),
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(labelText: 'Name'),
+                  ),
                   TextField(
                     controller: startController,
-                    decoration: const InputDecoration(labelText: 'Start address'),
+                    decoration: const InputDecoration(
+                      labelText: 'Start address',
+                    ),
                     keyboardType: TextInputType.number,
                   ),
                   DropdownButtonFormField<RegisterValueType>(
@@ -1053,10 +1377,11 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                     decoration: const InputDecoration(labelText: 'Value type'),
                     items: RegisterValueType.values
                         .map(
-                          (RegisterValueType type) => DropdownMenuItem<RegisterValueType>(
-                            value: type,
-                            child: Text(type.name),
-                          ),
+                          (RegisterValueType type) =>
+                              DropdownMenuItem<RegisterValueType>(
+                                value: type,
+                                child: Text(type.name),
+                              ),
                         )
                         .toList(),
                     onChanged: (RegisterValueType? next) {
@@ -1072,7 +1397,9 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                   ),
                   TextField(
                     controller: valueIndexController,
-                    decoration: const InputDecoration(labelText: 'Bit/byte index'),
+                    decoration: const InputDecoration(
+                      labelText: 'Bit/byte index',
+                    ),
                     keyboardType: TextInputType.number,
                   ),
                   DropdownButtonFormField<RegisterAccess>(
@@ -1080,10 +1407,11 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                     decoration: const InputDecoration(labelText: 'Access'),
                     items: RegisterAccess.values
                         .map(
-                          (RegisterAccess nextAccess) => DropdownMenuItem<RegisterAccess>(
-                            value: nextAccess,
-                            child: Text(nextAccess.name),
-                          ),
+                          (RegisterAccess nextAccess) =>
+                              DropdownMenuItem<RegisterAccess>(
+                                value: nextAccess,
+                                child: Text(nextAccess.name),
+                              ),
                         )
                         .toList(),
                     onChanged: (RegisterAccess? next) {
@@ -1097,8 +1425,14 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
             ),
           ),
           actions: <Widget>[
-            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Отмена')),
-            FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Добавить')),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Отмена'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Добавить'),
+            ),
           ],
         );
       },
@@ -1114,9 +1448,14 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
 
     final int? start = int.tryParse(startController.text.trim());
     final int parsedLength = int.tryParse(lengthController.text.trim()) ?? 1;
-    final int parsedValueIndex = int.tryParse(valueIndexController.text.trim()) ?? 0;
-    final String parsedName = nameController.text.trim().isEmpty ? 'Register ${_ranges.length + 1}' : nameController.text.trim();
-    final int storageLength = valueType == RegisterValueType.word ? parsedLength : 1;
+    final int parsedValueIndex =
+        int.tryParse(valueIndexController.text.trim()) ?? 0;
+    final String parsedName = nameController.text.trim().isEmpty
+        ? 'Register ${_ranges.length + 1}'
+        : nameController.text.trim();
+    final int storageLength = valueType == RegisterValueType.word
+        ? parsedLength
+        : 1;
 
     if (start == null || start < 0 || storageLength < 1) {
       if (mounted) {
@@ -1133,7 +1472,11 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
         valueType: valueType,
         valueIndex: parsedValueIndex,
       );
-      final bool added = _bank.addRange(range.start, range.storageLength, range.access);
+      final bool added = _bank.addRange(
+        range.start,
+        range.storageLength,
+        range.access,
+      );
       if (!added) {
         setState(() {
           _status = 'Ошибка: диапазон адресов уже занят';
@@ -1141,9 +1484,7 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
       } else {
         setState(() {
           _ranges.add(range);
-          _rangeValueControllers[range.start] = TextEditingController(
-            text: range.storageLength > 1 ? jsonEncode(List<int>.filled(range.storageLength, 0)) : '0',
-          );
+          _ensureRangeInputControllers(range);
           _status = 'Добавлен регистр ${range.name} (${range.start})';
         });
       }
@@ -1189,7 +1530,6 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     }
   }
 
-
   ByteOrderMode? _parseYamlByteOrder(String value) {
     switch (value.trim()) {
       case 'big_endian':
@@ -1209,7 +1549,11 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     final Map<String, String> meta = <String, String>{};
     for (final String rawLine in LineSplitter.split(content)) {
       final String line = rawLine.trim();
-      if (line.isEmpty || line.startsWith('#') || line.startsWith('- ') || line == 'inputs:' || line.startsWith('inputs:')) {
+      if (line.isEmpty ||
+          line.startsWith('#') ||
+          line.startsWith('- ') ||
+          line == 'inputs:' ||
+          line.startsWith('inputs:')) {
         continue;
       }
       if (rawLine.startsWith(' ') || rawLine.startsWith('	')) {
@@ -1283,7 +1627,9 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
         final String rest = trimmed.substring(2).trim();
         if (rest.contains(':')) {
           final int split = rest.indexOf(':');
-          item[rest.substring(0, split).trim()] = rest.substring(split + 1).trim();
+          item[rest.substring(0, split).trim()] = rest
+              .substring(split + 1)
+              .trim();
         }
         items.add(item);
         current = item;
@@ -1294,7 +1640,9 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
         continue;
       }
       final int split = trimmed.indexOf(':');
-      current[trimmed.substring(0, split).trim()] = trimmed.substring(split + 1).trim();
+      current[trimmed.substring(0, split).trim()] = trimmed
+          .substring(split + 1)
+          .trim();
     }
 
     return items;
@@ -1302,7 +1650,9 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
 
   String _parseYamlName(String value) {
     final String trimmed = value.trim();
-    if (trimmed.length >= 2 && trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    if (trimmed.length >= 2 &&
+        trimmed.startsWith("'") &&
+        trimmed.endsWith("'")) {
       return trimmed.substring(1, trimmed.length - 1).replaceAll("''", "'");
     }
     return trimmed;
@@ -1400,15 +1750,26 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
         return;
       }
 
-
       final int configPort = int.tryParse((meta['port'] ?? '').trim()) ?? _port;
-      final int configServerId = int.tryParse((meta['server_id'] ?? meta['slave_id'] ?? '').trim()) ?? _serverId;
-      final int configAddressOffset = int.tryParse((meta['address_offset'] ?? '').trim()) ?? _addressOffset;
-      final ByteOrderMode configByteOrder = _parseYamlByteOrder(meta['byte_order'] ?? '') ?? _byteOrderMode;
-      final String configServerNameRaw = _parseYamlName(meta['server_name'] ?? '').trim();
-      final String configServerName = configServerNameRaw.isEmpty ? _serverName : configServerNameRaw;
+      final int configServerId =
+          int.tryParse((meta['server_id'] ?? meta['slave_id'] ?? '').trim()) ??
+          _serverId;
+      final int configAddressOffset =
+          int.tryParse((meta['address_offset'] ?? '').trim()) ?? _addressOffset;
+      final ByteOrderMode configByteOrder =
+          _parseYamlByteOrder(meta['byte_order'] ?? '') ?? _byteOrderMode;
+      final String configServerNameRaw = _parseYamlName(
+        meta['server_name'] ?? '',
+      ).trim();
+      final String configServerName = configServerNameRaw.isEmpty
+          ? _serverName
+          : configServerNameRaw;
 
-      if (configPort < 1 || configPort > 65535 || configServerId < 0 || configServerId > 255 || (configAddressOffset != 0 && configAddressOffset != 1)) {
+      if (configPort < 1 ||
+          configPort > 65535 ||
+          configServerId < 0 ||
+          configServerId > 255 ||
+          (configAddressOffset != 0 && configAddressOffset != 1)) {
         setState(() {
           _status = 'Ошибка импорта: неверные настройки сервера в YAML';
         });
@@ -1422,11 +1783,19 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
         final String name = _parseYamlName(item['name'] ?? '');
         final int? address = int.tryParse((item['address'] ?? '').trim());
         final RegisterAccess? access = _parseYamlAccess(item['access'] ?? '');
-        final RegisterValueType? type = _parseYamlValueType(item['value_type'] ?? '');
+        final RegisterValueType? type = _parseYamlValueType(
+          item['value_type'] ?? '',
+        );
         final int length = int.tryParse((item['length'] ?? '').trim()) ?? 1;
         final int index = int.tryParse((item['index'] ?? '').trim()) ?? 0;
 
-        if (name.isEmpty || address == null || address < 0 || access == null || type == null || length < 1 || index < 0) {
+        if (name.isEmpty ||
+            address == null ||
+            address < 0 ||
+            access == null ||
+            type == null ||
+            length < 1 ||
+            index < 0) {
           setState(() {
             _status = 'Ошибка импорта: некорректная запись в YAML';
           });
@@ -1452,14 +1821,27 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
       for (final RegisterRange range in _ranges) {
         _bank.removeRange(range.start, range.storageLength);
       }
-      for (final TextEditingController controller in _rangeValueControllers.values) {
-        controller.dispose();
+      for (final List<TextEditingController> controllers
+          in _rangeValueControllers.values) {
+        for (final TextEditingController controller in controllers) {
+          controller.dispose();
+        }
+      }
+      for (final List<FocusNode> nodes in _rangeValueFocusNodes.values) {
+        for (final FocusNode node in nodes) {
+          node.dispose();
+        }
       }
       _rangeValueControllers.clear();
+      _rangeValueFocusNodes.clear();
       _ranges.clear();
 
       for (final RegisterRange range in importedRanges) {
-        final bool added = _bank.addRange(range.start, range.storageLength, range.access);
+        final bool added = _bank.addRange(
+          range.start,
+          range.storageLength,
+          range.access,
+        );
         if (!added) {
           setState(() {
             _status = 'Ошибка импорта: пересечение адресов в YAML';
@@ -1468,18 +1850,18 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
         }
         final List<int> initial = importedValues[range.start] ?? <int>[];
         if (initial.isNotEmpty) {
-          final List<int> valuesToWrite = initial.take(range.storageLength).toList();
+          final List<int> valuesToWrite = initial
+              .take(range.storageLength)
+              .toList();
           if (valuesToWrite.length < range.storageLength) {
-            valuesToWrite.addAll(List<int>.filled(range.storageLength - valuesToWrite.length, 0));
+            valuesToWrite.addAll(
+              List<int>.filled(range.storageLength - valuesToWrite.length, 0),
+            );
           }
           _bank.writeMultiple(0, range.start, valuesToWrite);
         }
         _ranges.add(range);
-        _rangeValueControllers[range.start] = TextEditingController(
-          text: range.storageLength > 1
-              ? jsonEncode(_bank.readRangeRaw(range.start, range.storageLength) ?? List<int>.filled(range.storageLength, 0))
-              : (_bank.readRangeRaw(range.start, 1)?.first ?? 0).toString(),
-        );
+        _ensureRangeInputControllers(range);
       }
 
       if (!mounted) {
@@ -1548,7 +1930,9 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                   width: 120,
                   child: TextField(
                     controller: _serverIdController,
-                    decoration: const InputDecoration(labelText: 'Server ID (Slave ID)'),
+                    decoration: const InputDecoration(
+                      labelText: 'Server ID (Slave ID)',
+                    ),
                     keyboardType: TextInputType.number,
                   ),
                 ),
@@ -1558,7 +1942,13 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                     value: _byteOrderMode,
                     decoration: const InputDecoration(labelText: 'Byte Order'),
                     items: ByteOrderMode.values
-                        .map((ByteOrderMode mode) => DropdownMenuItem<ByteOrderMode>(value: mode, child: Text(mode.title)))
+                        .map(
+                          (ByteOrderMode mode) =>
+                              DropdownMenuItem<ByteOrderMode>(
+                                value: mode,
+                                child: Text(mode.title),
+                              ),
+                        )
                         .toList(),
                     onChanged: (ByteOrderMode? mode) {
                       if (mode == null) {
@@ -1574,7 +1964,9 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                   width: 160,
                   child: DropdownButtonFormField<int>(
                     value: _addressOffset,
-                    decoration: const InputDecoration(labelText: 'Address Offset'),
+                    decoration: const InputDecoration(
+                      labelText: 'Address Offset',
+                    ),
                     items: const <DropdownMenuItem<int>>[
                       DropdownMenuItem<int>(value: 0, child: Text('0')),
                       DropdownMenuItem<int>(value: 1, child: Text('1')),
@@ -1589,8 +1981,14 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                     },
                   ),
                 ),
-                FilledButton(onPressed: _restartServer, child: const Text('Start/Restart')),
-                OutlinedButton(onPressed: _stopServer, child: const Text('Stop')),
+                FilledButton(
+                  onPressed: _restartServer,
+                  child: const Text('Start/Restart'),
+                ),
+                OutlinedButton(
+                  onPressed: _stopServer,
+                  child: const Text('Stop'),
+                ),
                 FilledButton.icon(
                   onPressed: _importConfigFromYaml,
                   icon: const Icon(Icons.download),
@@ -1615,7 +2013,11 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                     _logsVisible = !_logsVisible;
                   });
                 },
-                icon: Icon(_logsVisible ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up),
+                icon: Icon(
+                  _logsVisible
+                      ? Icons.keyboard_arrow_down
+                      : Icons.keyboard_arrow_up,
+                ),
                 label: Text(_logsVisible ? 'Скрыть логи' : 'Открыть логи'),
               ),
             ),
@@ -1650,7 +2052,10 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Write Logs (From PLC/UI)', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text(
+              'Write Logs (From PLC/UI)',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 6),
             Expanded(
               child: ListView.builder(
@@ -1661,7 +2066,10 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                       '${w.ts.hour.toString().padLeft(2, '0')}:${w.ts.minute.toString().padLeft(2, '0')}:${w.ts.second.toString().padLeft(2, '0')}';
                   return Text(
                     '#${w.seq} $t u=${w.unitId} 0x${w.addr.toRadixString(16).toUpperCase()} (${w.addr}) ${w.values}',
-                    style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                    ),
                   );
                 },
               ),
@@ -1681,7 +2089,12 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
           children: [
             Row(
               children: [
-                const Expanded(child: Text('Registers', style: TextStyle(fontWeight: FontWeight.bold))),
+                const Expanded(
+                  child: Text(
+                    'Registers',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
                 IconButton(
                   tooltip: 'Добавить регистр',
                   onPressed: _showAddRegisterDialog,
@@ -1693,7 +2106,9 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
             Expanded(
               child: LayoutBuilder(
                 builder: (BuildContext context, BoxConstraints constraints) {
-                  final int columns = (constraints.maxWidth / 360).floor().clamp(1, 6);
+                  final int columns = (constraints.maxWidth / 360)
+                      .floor()
+                      .clamp(1, 6);
                   return GridView.builder(
                     itemCount: _ranges.length,
                     gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
@@ -1704,13 +2119,32 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                     ),
                     itemBuilder: (BuildContext context, int index) {
                       final RegisterRange range = _ranges[index];
-                      final bool changed = range.isChanged(_bank, highlightWindow);
-                      final TextEditingController? valueController = _rangeValueControllers[range.start];
+                      final bool changed = range.isChanged(
+                        _bank,
+                        highlightWindow,
+                      );
+                      _ensureRangeInputControllers(range);
+                      final List<TextEditingController> valueControllers =
+                          _rangeValueControllers[range.start] ??
+                          <TextEditingController>[];
+                      final List<FocusNode> focusNodes =
+                          _rangeValueFocusNodes[range.start] ?? <FocusNode>[];
+                      final List<int> currentValues =
+                          _bank.readRangeRaw(
+                            range.start,
+                            range.storageLength,
+                          ) ??
+                          List<int>.filled(range.storageLength, 0);
                       return Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
                           border: Border.all(color: Colors.white24),
-                          color: changed ? Colors.yellow.withValues(alpha: 0.18) : null,
+                          color: changed
+                              ? Colors.yellow.withValues(alpha: 0.18)
+                              : null,
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1720,38 +2154,80 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                                 Expanded(
                                   child: Text(
                                     '${range.name} | ${range.start} | ${range.typeLabel} | ${range.accessLabel}',
-                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                    ),
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
                                 IconButton(
                                   visualDensity: VisualDensity.compact,
+                                  tooltip: 'Побитный редактор',
+                                  onPressed: () => _showBitEditor(range),
+                                  icon: const Icon(Icons.tune, size: 18),
+                                ),
+                                IconButton(
+                                  visualDensity: VisualDensity.compact,
                                   onPressed: () => _removeRange(index),
-                                  icon: const Icon(Icons.delete_outline, size: 18),
+                                  icon: const Icon(
+                                    Icons.delete_outline,
+                                    size: 18,
+                                  ),
                                 ),
                               ],
                             ),
-                            Text('Current: ${range.displayValue(_bank)}', style: const TextStyle(fontSize: 12), maxLines: 2),
-                            if (valueController != null) ...<Widget>[
-                              const SizedBox(height: 2),
-                              TextField(
-                                controller: valueController,
-                                enabled: true,
-                                decoration: const InputDecoration(
-                                  isDense: true,
-                                  labelText: 'New value (number or [..])',
-                                ),
+                            Expanded(
+                              child: ListView.builder(
+                                itemCount: valueControllers.length,
+                                itemBuilder: (BuildContext context, int row) {
+                                  final int addr = range.start + row;
+                                  final int value = row < currentValues.length
+                                      ? currentValues[row]
+                                      : 0;
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 4),
+                                    child: Row(
+                                      children: [
+                                        SizedBox(
+                                          width: 84,
+                                          child: Text(
+                                            '[$addr] $value',
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: TextField(
+                                            controller: valueControllers[row],
+                                            focusNode: row < focusNodes.length
+                                                ? focusNodes[row]
+                                                : null,
+                                            keyboardType: TextInputType.number,
+                                            decoration: const InputDecoration(
+                                              isDense: true,
+                                              hintText: 'Новое значение',
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
                               ),
-                              const SizedBox(height: 2),
-                              SizedBox(
-                                height: 32,
-                                child: FilledButton(
-                                  onPressed: () => _writeRangeValue(range),
-                                  child: const Text('Write value'),
-                                ),
+                            ),
+                            SizedBox(
+                              height: 32,
+                              width: double.infinity,
+                              child: FilledButton(
+                                onPressed: () => _writeRangeValue(range),
+                                child: const Text('Записать'),
                               ),
-                            ],
+                            ),
                           ],
                         ),
                       );
@@ -1773,7 +2249,10 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Request Logs (MBAP + Modbus Request APU)', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text(
+              'Request Logs (MBAP + Modbus Request APU)',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 6),
             Align(
               alignment: Alignment.centerLeft,
@@ -1783,23 +2262,23 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                 label: Text(_requestLogPaused ? 'Resume' : 'Pause'),
               ),
             ),
+            const SizedBox(height: 6),
             Expanded(
               child: ListView.builder(
                 itemCount: _requestLogView.length,
                 itemBuilder: (BuildContext context, int index) {
                   final ModbusLogEntry e = _requestLogView[index];
-                  final String t =
-                      '${e.timestamp.hour.toString().padLeft(2, '0')}:${e.timestamp.minute.toString().padLeft(2, '0')}:${e.timestamp.second.toString().padLeft(2, '0')}';
-                  return ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    title: Text('$t ${e.client} FC${e.functionCode} ${e.result}'),
-                    subtitle: Text(
-                      'addr=${e.startAddress} len=${e.length}\n'
-                      'MBAP: ${e.mbapHeader}\n'
-                      'Modbus request: ${e.modbusRequest}\n'
-                      'Request APU: ${e.requestApu}',
-                      style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+
+                  return Text(
+                    'fc=0x${e.functionCode.toRadixString(16).toUpperCase().padLeft(2, '0')} '
+                    'addr=${e.startAddress} len=${e.length}\n'
+                    'MBAP: ${e.mbapHeader}\n'
+                    'ModbusReq: ${e.modbusRequest}\n'
+                    'APU(bytes): ${e.requestApu}\n'
+                    'Result: ${e.result}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
                     ),
                   );
                 },
