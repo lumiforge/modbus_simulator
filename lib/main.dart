@@ -1337,6 +1337,22 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
     });
   }
 
+  void _reorderRanges(int fromIndex, int toIndex) {
+    if (fromIndex == toIndex ||
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= _ranges.length ||
+        toIndex >= _ranges.length) {
+      return;
+    }
+
+    setState(() {
+      final RegisterRange moved = _ranges.removeAt(fromIndex);
+      final int insertIndex = toIndex > fromIndex ? toIndex - 1 : toIndex;
+      _ranges.insert(insertIndex, moved);
+    });
+  }
+
   Future<void> _showAddRegisterDialog() async {
     final TextEditingController nameController = TextEditingController();
     final TextEditingController startController = TextEditingController();
@@ -2135,101 +2151,76 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
                             range.storageLength,
                           ) ??
                           List<int>.filled(range.storageLength, 0);
-                      return Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.white24),
-                          color: changed
-                              ? Colors.yellow.withValues(alpha: 0.18)
-                              : null,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    '${range.name} | ${range.start} | ${range.typeLabel} | ${range.accessLabel}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 12,
-                                    ),
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
+                      return DragTarget<int>(
+                        onWillAcceptWithDetails: (
+                          DragTargetDetails<int> details,
+                        ) {
+                          return details.data != index;
+                        },
+                        onAcceptWithDetails: (
+                          DragTargetDetails<int> details,
+                        ) {
+                          _reorderRanges(details.data, index);
+                        },
+                        builder: (
+                          BuildContext context,
+                          List<int?> candidateData,
+                          List<dynamic> rejectedData,
+                        ) {
+                          final bool isDropTarget = candidateData.isNotEmpty;
+                          return LongPressDraggable<int>(
+                            data: index,
+                            feedback: Material(
+                              color: Colors.transparent,
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 360,
+                                  minWidth: 220,
+                                ),
+                                child: Opacity(
+                                  opacity: 0.88,
+                                  child: _buildRangeCard(
+                                    range: range,
+                                    index: index,
+                                    changed: changed,
+                                    valueControllers: valueControllers,
+                                    focusNodes: focusNodes,
+                                    currentValues: currentValues,
                                   ),
                                 ),
-                                IconButton(
-                                  visualDensity: VisualDensity.compact,
-                                  tooltip: 'Побитный редактор',
-                                  onPressed: () => _showBitEditor(range),
-                                  icon: const Icon(Icons.tune, size: 18),
-                                ),
-                                IconButton(
-                                  visualDensity: VisualDensity.compact,
-                                  onPressed: () => _removeRange(index),
-                                  icon: const Icon(
-                                    Icons.delete_outline,
-                                    size: 18,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Expanded(
-                              child: ListView.builder(
-                                itemCount: valueControllers.length,
-                                itemBuilder: (BuildContext context, int row) {
-                                  final int addr = range.start + row;
-                                  final int value = row < currentValues.length
-                                      ? currentValues[row]
-                                      : 0;
-                                  return Padding(
-                                    padding: const EdgeInsets.only(bottom: 4),
-                                    child: Row(
-                                      children: [
-                                        SizedBox(
-                                          width: 84,
-                                          child: Text(
-                                            '[$addr] $value',
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                            ),
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 6),
-                                        Expanded(
-                                          child: TextField(
-                                            controller: valueControllers[row],
-                                            focusNode: row < focusNodes.length
-                                                ? focusNodes[row]
-                                                : null,
-                                            keyboardType: TextInputType.number,
-                                            decoration: const InputDecoration(
-                                              isDense: true,
-                                              hintText: 'Новое значение',
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
                               ),
                             ),
-                            SizedBox(
-                              height: 32,
-                              width: double.infinity,
-                              child: FilledButton(
-                                onPressed: () => _writeRangeValue(range),
-                                child: const Text('Записать'),
+                            childWhenDragging: Opacity(
+                              opacity: 0.35,
+                              child: _buildRangeCard(
+                                range: range,
+                                index: index,
+                                changed: changed,
+                                valueControllers: valueControllers,
+                                focusNodes: focusNodes,
+                                currentValues: currentValues,
                               ),
                             ),
-                          ],
-                        ),
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                border: isDropTarget
+                                    ? Border.all(
+                                        color: Colors.lightBlueAccent,
+                                        width: 2,
+                                      )
+                                    : null,
+                              ),
+                              child: _buildRangeCard(
+                                range: range,
+                                index: index,
+                                changed: changed,
+                                valueControllers: valueControllers,
+                                focusNodes: focusNodes,
+                                currentValues: currentValues,
+                              ),
+                            ),
+                          );
+                        },
                       );
                     },
                   );
@@ -2238,6 +2229,105 @@ class _ModbusDashboardState extends State<ModbusDashboard> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildRangeCard({
+    required RegisterRange range,
+    required int index,
+    required bool changed,
+    required List<TextEditingController> valueControllers,
+    required List<FocusNode> focusNodes,
+    required List<int> currentValues,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.white24),
+        color: changed ? Colors.yellow.withValues(alpha: 0.18) : null,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${range.name} | ${range.start} | ${range.typeLabel} | ${range.accessLabel}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                tooltip: 'Побитный редактор',
+                onPressed: () => _showBitEditor(range),
+                icon: const Icon(Icons.tune, size: 18),
+              ),
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _removeRange(index),
+                icon: const Icon(
+                  Icons.delete_outline,
+                  size: 18,
+                ),
+              ),
+            ],
+          ),
+          Expanded(
+            child: ListView.builder(
+              itemCount: valueControllers.length,
+              itemBuilder: (BuildContext context, int row) {
+                final int addr = range.start + row;
+                final int value =
+                    row < currentValues.length ? currentValues[row] : 0;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 84,
+                        child: Text(
+                          '[$addr] $value',
+                          style: const TextStyle(
+                            fontSize: 11,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: TextField(
+                          controller: valueControllers[row],
+                          focusNode:
+                              row < focusNodes.length ? focusNodes[row] : null,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            hintText: 'Новое значение',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          SizedBox(
+            height: 32,
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: () => _writeRangeValue(range),
+              child: const Text('Записать'),
+            ),
+          ),
+        ],
       ),
     );
   }
